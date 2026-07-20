@@ -44,7 +44,34 @@ npm run website:build
 npm run test:website
 ```
 
-官网静态文件生成到 `dist-website/`。部署时将该目录发布到静态托管服务。
+官网静态文件生成到 `dist-website/`，Vercel 将该目录发布为官网。
+
+## Vercel 部署
+
+官网已部署到 Vercel：
+
+- 正式网址：<https://shell-manage.vercel.app>
+- Vercel 项目：`liuzhuangoutlookcoms-projects/shell-manage`
+- GitHub 仓库：`liuzhuang/test-shell`
+- 构建命令：`npm run website:build`
+- 输出目录：`dist-website`
+
+根目录的 `vercel.json` 保存构建命令和输出目录，`.vercelignore` 排除桌面应用源码、安装包和本地产物。`.vercel/` 保存本地项目关联信息，不提交到 Git。
+
+首次关联本地仓库：
+
+```bash
+vercel link --yes --project shell-manage --scope liuzhuangoutlookcoms-projects
+```
+
+部署预览环境或生产环境：
+
+```bash
+vercel deploy
+vercel deploy --prod
+```
+
+Vercel 项目已连接 GitHub 仓库。通过 Git 集成触发的部署使用同一份 `vercel.json` 配置。
 
 ## 本地安装包
 
@@ -63,9 +90,9 @@ npm run verify:installer:mac
 
 `.github/workflows/release.yml` 由公开仓库的 `v*` Tag 触发，版本号必须与 `package.json` 一致，并构建以下产物发布到 GitHub Releases：
 
-- Windows x64：NSIS `.exe`
-- macOS Intel：`x64.dmg` 与更新用 ZIP
-- macOS Apple Silicon：`arm64.dmg` 与更新用 ZIP
+- Windows x64：`ShellManage-<version>-windows-x64-setup.exe`
+- macOS Intel：`ShellManage-<version>-macos-x64.dmg` 与同名更新 ZIP
+- macOS Apple Silicon：`ShellManage-<version>-macos-arm64.dmg` 与同名更新 ZIP
 - `latest.yml`、`latest-mac.yml` 和 blockmap 更新元数据
 
 当前 workflow 生成未使用平台证书的预览版，不需要配置 Apple Developer 或 Windows 代码签名 Secret。macOS 应用使用不依赖账号的 ad-hoc 签名，以满足应用包完整性校验；该签名不等同于 Developer ID 签名或 Apple 公证。Windows 客户端读取 `latest.yml` 自动下载与安装。macOS 客户端使用 Sparkle 读取架构对应的 `appcast-mac-x64.xml` 或 `appcast-mac-arm64.xml`，并校验 EdDSA 签名后完成替换与重启。公开仓库必须配置 `SPARKLE_PRIVATE_KEY`。

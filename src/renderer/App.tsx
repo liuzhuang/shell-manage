@@ -11,6 +11,8 @@ import { SshKeysPage } from './pages/SshKeysPage'
 import { CollaborationPage } from './pages/CollaborationPage'
 import { LogPage } from './pages/LogPage'
 import { MultiLogPage } from './pages/MultiLogPage'
+import { MonitoringPage } from './pages/MonitoringPage'
+import { BrowserPage } from './pages/BrowserPage'
 import { Toast } from './components/Toast'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { PresetProgressOverlay } from './components/PresetProgressOverlay'
@@ -62,9 +64,7 @@ const RECENT_COMMAND_PAGES_LIMIT = 8
 const QueryPage = lazy(() => import('./pages/QueryPageShell').then((mod) => ({ default: mod.QueryPage })))
 const TerminalPage = lazy(() => import('./pages/TerminalPage').then((mod) => ({ default: mod.TerminalPage })))
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then((mod) => ({ default: mod.DashboardPage })))
-const MonitoringPage = lazy(() => import('./pages/MonitoringPage').then((mod) => ({ default: mod.MonitoringPage })))
 const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then((mod) => ({ default: mod.AnalyticsPage })))
-const BrowserPage = lazy(() => import('./pages/BrowserPage').then((mod) => ({ default: mod.BrowserPage })))
 
 type SecondaryCommandPage = 'log' | 'terminal'
 type RectSnapshot = { left: number; top: number; width: number; height: number }
@@ -1508,7 +1508,7 @@ export default function App() {
           background: 'var(--bg)'
         }}
       >
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: page === 'browser' ? 0 : '0 16px 16px' }}>
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: page === 'browser' ? 0 : '0 16px 16px' }}>
       {page !== 'browser' && (
         <div
           data-testid="window-top-drag-region"
@@ -1714,8 +1714,15 @@ export default function App() {
         </div>
       )}
 
-      {page === 'editor' && (
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          overflow: 'auto',
+          visibility: page === 'editor' ? 'visible' : 'hidden',
+          pointerEvents: page === 'editor' ? 'auto' : 'none'
+        }}
+      >
         <EditorPage
           editorRaw={editorRaw}
           editorError={editorError}
@@ -1772,8 +1779,7 @@ export default function App() {
           locateLine={locateLine}
           onLocated={() => setLocateLine(undefined)}
         />
-        </div>
-      )}
+      </div>
       {page === 'ssh-keys' && (
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           <SshKeysPage

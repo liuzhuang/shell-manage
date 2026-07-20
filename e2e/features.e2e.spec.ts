@@ -44,18 +44,70 @@ settings:
   logBufferLines: 5000
 `
 
+const sidebarPerformanceConfigYaml = `commands:
+${Array.from({ length: 32 }, (_, index) => `  - name: command-${index + 1}
+    command: node -e "console.log('command-${index + 1}')"
+    tags: [api, local]
+    mode: ${index < 12 ? 'terminal' : 'service'}
+    autoRestart: false`).join('\n')}
+projectDirectories: []
+deployScripts: []
+presets: []
+settings:
+  llm:
+    provider: "openai"
+    endpoint: "https://example.invalid"
+    apiKey: "sk-xxxxx"
+    model: "test-model"
+  logBufferLines: 5000
+`
+
 let electronApp: ElectronApplication
 let page: Page
 let testHome = ''
 
-test.beforeEach(async () => {
+async function measureSidebarSwitch(targetTestId: string, pageTestId: string): Promise<number> {
+  return page.evaluate(
+    ({ targetTestId, pageTestId }) =>
+      new Promise<number>((resolve, reject) => {
+        const target = document.querySelector<HTMLElement>(`[data-testid="${targetTestId}"]`)
+        if (!target) {
+          reject(new Error(`未找到侧栏入口：${targetTestId}`))
+          return
+        }
+        const startedAt = performance.now()
+        target.click()
+        const waitForPage = () => {
+          if (!document.querySelector(`[data-testid="${pageTestId}"]`)) {
+            if (performance.now() - startedAt >= 2000) {
+              reject(new Error(`页面未完成切换：${pageTestId}`))
+              return
+            }
+            requestAnimationFrame(waitForPage)
+            return
+          }
+          requestAnimationFrame(() => {
+            resolve(performance.now() - startedAt)
+          })
+        }
+        requestAnimationFrame(waitForPage)
+      }),
+    { targetTestId, pageTestId }
+  )
+}
+
+test.beforeEach(async ({}, testInfo) => {
   if (!existsSync(appEntry)) {
     throw new Error('未找到 dist/main/index.js，请先执行 npm run build')
   }
   testHome = await mkdtemp(join(tmpdir(), 'shell-manage-feat-e2e-'))
   const configDir = join(testHome, '.shell-manage')
   await mkdir(configDir, { recursive: true })
-  await writeFile(join(configDir, 'config.yaml'), testConfigYaml, 'utf-8')
+  await writeFile(
+    join(configDir, 'config.yaml'),
+    testInfo.title === '侧边栏 Tab 首次加载与重复切换保持响应' ? sidebarPerformanceConfigYaml : testConfigYaml,
+    'utf-8'
+  )
   await launchWithHome(testHome)
 })
 
@@ -152,6 +204,31 @@ test('点击"全部"标签取消过滤还原所有命令', async () => {
 })
 
 // ─── 侧边栏折叠/展开 ─────────────────────────────────────────────────────────
+
+test('侧边栏 Tab 首次加载与重复切换保持响应', async () => {
+  const measureRound = async () => [
+    await measureSidebarSwitch('tab-editor', 'editor-page'),
+    await measureSidebarSwitch('tab-home', 'home-page'),
+    await measureSidebarSwitch('tab-browser', 'browser-page'),
+    await measureSidebarSwitch('tab-home', 'home-page'),
+    await measureSidebarSwitch('tab-monitoring', 'monitoring-page'),
+    await measureSidebarSwitch('tab-home', 'home-page'),
+    await measureSidebarSwitch('tab-ssh-keys', 'ssh-keys-page'),
+    await measureSidebarSwitch('tab-collaboration', 'collaboration-page')
+  ]
+  const firstRound = await measureRound()
+  const secondRound = await measureRound()
+
+  expect(firstRound[4], `监控页首次加载：${firstRound[4].toFixed(1)}ms`).toBeLessThan(120)
+  expect(
+    Math.max(...firstRound.filter((_, index) => index !== 4)),
+    `其他页面首次切换：${firstRound.map((value) => `${value.toFixed(1)}ms`).join(', ')}`
+  ).toBeLessThan(50)
+  expect(
+    Math.max(...secondRound),
+    `重复切换：${secondRound.map((value) => `${value.toFixed(1)}ms`).join(', ')}`
+  ).toBeLessThan(50)
+})
 
 test('侧边栏可折叠为图标模式', async () => {
   await expect(page.getByTestId('home-page')).toBeVisible()

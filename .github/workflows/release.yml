@@ -87,8 +87,8 @@ jobs:
           bash scripts/prepare-sparkle.sh tools
           APPCAST_ROOT="$RUNNER_TEMP/shell-manage-appcast"
           mkdir -p "$APPCAST_ROOT/x64" "$APPCAST_ROOT/arm64"
-          cp "release/ShellManage-${VERSION}-mac.zip" "$APPCAST_ROOT/x64/"
-          cp "release/ShellManage-${VERSION}-arm64-mac.zip" "$APPCAST_ROOT/arm64/"
+          cp "release/ShellManage-${VERSION}-macos-x64.zip" "$APPCAST_ROOT/x64/"
+          cp "release/ShellManage-${VERSION}-macos-arm64.zip" "$APPCAST_ROOT/arm64/"
           printf '%s' "$SPARKLE_PRIVATE_KEY" | build/sparkle-tools/bin/generate_appcast \
             --ed-key-file - \
             --download-url-prefix "https://github.com/liuzhuang/shell-manage/releases/download/${TAG}/" \
@@ -137,11 +137,11 @@ jobs:
         run: |
           ASSETS="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
           for REQUIRED in \
-            "ShellManage-${VERSION}-x64-setup.exe" \
-            "ShellManage-${VERSION}-x64.dmg" \
-            "ShellManage-${VERSION}-arm64.dmg" \
-            "ShellManage-${VERSION}-mac.zip" \
-            "ShellManage-${VERSION}-arm64-mac.zip" \
+            "ShellManage-${VERSION}-windows-x64-setup.exe" \
+            "ShellManage-${VERSION}-macos-x64.dmg" \
+            "ShellManage-${VERSION}-macos-arm64.dmg" \
+            "ShellManage-${VERSION}-macos-x64.zip" \
+            "ShellManage-${VERSION}-macos-arm64.zip" \
             latest.yml \
             latest-mac.yml \
             appcast-mac-x64.xml \

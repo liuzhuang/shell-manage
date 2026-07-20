@@ -1,0 +1,14 @@
+/node_modules
+/dist
+/dist-website
+/release
+/build
+/playwright-report
+/test-results
+/e2e
+/src
+/scripts
+/skills
+/docs/*
+!/docs/website
+!/docs/website/**

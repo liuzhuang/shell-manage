@@ -60,9 +60,9 @@ npm run release:patch
 
 | 平台 | 主要产物 |
 | --- | --- |
-| Windows x64 | `ShellManage-<version>-x64-setup.exe`、`.blockmap`、`latest.yml` |
-| macOS Intel | `ShellManage-<version>-x64.dmg`、`ShellManage-<version>-mac.zip` |
-| macOS Apple Silicon | `ShellManage-<version>-arm64.dmg`、`ShellManage-<version>-arm64-mac.zip` |
+| Windows x64 | `ShellManage-<version>-windows-x64-setup.exe`、`.blockmap`、`latest.yml` |
+| macOS Intel | `ShellManage-<version>-macos-x64.dmg`、`ShellManage-<version>-macos-x64.zip` |
+| macOS Apple Silicon | `ShellManage-<version>-macos-arm64.dmg`、`ShellManage-<version>-macos-arm64.zip` |
 | macOS 更新索引 | `appcast-mac-x64.xml`、`appcast-mac-arm64.xml` |
 
 ## 自动更新方式
