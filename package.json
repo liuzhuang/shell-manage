@@ -1,6 +1,6 @@
 {
   "name": "shell-manage",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Manage repeatable development commands, logs, terminals, monitoring, and SSH workflows from one desktop app.",
   "homepage": "https://github.com/liuzhuang/shell-manage#readme",
   "repository": {
