@@ -90,6 +90,11 @@ if [[ ! -f "$APP_PATH/Contents/MacOS/$EXECUTABLE_NAME" ]]; then
   exit 1
 fi
 
+if ! codesign --verify --deep --strict "$APP_PATH"; then
+  echo "应用包的 ad-hoc 签名校验失败: $APP_PATH"
+  exit 1
+fi
+
 echo "==> Verify passed"
 echo "App: $APP_PATH"
 echo "Applications link: $MOUNT_POINT/Applications"
@@ -98,3 +103,4 @@ echo "Tray icon: $APP_PATH/Contents/Resources/icons/trayTemplate.png"
 echo "CFBundleName: ${APP_NAME:-N/A}"
 echo "CFBundleIdentifier: $BUNDLE_ID"
 echo "CFBundleExecutable: $EXECUTABLE_NAME"
+echo "Code signing: ad-hoc signature verified"

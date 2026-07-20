@@ -7,9 +7,8 @@ TARGET_ARCH="${TARGET_ARCH:-arm64}"
 case "$TARGET_ARCH" in
   arm64) ARCH_FLAG="--arm64" ;;
   x64) ARCH_FLAG="--x64" ;;
-  universal) ARCH_FLAG="--universal" ;;
   *)
-    echo "Unsupported TARGET_ARCH: $TARGET_ARCH (allowed: arm64, x64, universal)"
+    echo "Unsupported TARGET_ARCH: $TARGET_ARCH (allowed: arm64, x64)"
     exit 1
     ;;
 esac
@@ -17,6 +16,9 @@ esac
 echo "==> Build production dist"
 cd "$ROOT_DIR"
 npm run build
+
+echo "==> Prepare Sparkle updater"
+bash "$ROOT_DIR/scripts/prepare-sparkle.sh" client
 
 echo "==> Build macOS installer (.dmg), arch=$TARGET_ARCH"
 npx electron-builder --mac dmg "$ARCH_FLAG" --publish never

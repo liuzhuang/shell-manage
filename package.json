@@ -27,9 +27,11 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "test:browser-profile-import": "node --test src/main/browser-profile-importer.test.ts",
+    "test:auto-update": "node --test src/main/sparkle-output.test.ts",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:headed": "npm run build && playwright test --headed",
     "test:e2e:layout:video": "npm run build && playwright test --config=playwright.video.config.ts -g \"@layout-stability\"",
+    "prepare:sparkle": "bash scripts/prepare-sparkle.sh client",
     "rebuild:native": "electron-rebuild -f -w node-pty,better-sqlite3",
     "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3",
     "bump:patch": "npm version patch --no-git-tag-version",
@@ -49,6 +51,7 @@
     "appId": "com.liuzhuang.shell-manage",
     "productName": "ShellManage",
     "asar": true,
+    "afterPack": "scripts/after-pack.cjs",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -80,9 +83,21 @@
       ],
       "category": "public.app-category.developer-tools",
       "icon": "resources/icons/icon.icns",
-      "identity": null,
+      "identity": "-",
       "hardenedRuntime": false,
-      "notarize": false
+      "notarize": false,
+      "extendInfo": {
+        "SUPublicEDKey": "7UtO/eHECsaHARCN+u9TRRPOJSkYgMSPpJMMVI3xiIo=",
+        "SUFeedURL": "https://github.com/liuzhuang/shell-manage/releases/latest/download/appcast-mac-x64.xml",
+        "SUVerifyUpdateBeforeExtraction": true,
+        "SURequireSignedFeed": true
+      },
+      "extraResources": [
+        {
+          "from": "build/sparkle/sparkle.app",
+          "to": "sparkle.app"
+        }
+      ]
     },
     "win": {
       "target": [

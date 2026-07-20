@@ -53,11 +53,14 @@ test('E2E 模拟：手动检查更新可走通「已是最新版本」', async (
   await expect(page.getByTestId('global-toast')).toContainText('当前已是最新版本', { timeout: 8000 })
 })
 
-test('macOS 未签名客户端可检查 GitHub Release 更新', async () => {
+test('macOS 客户端可检查、下载并进入自动安装流程', async () => {
   await launchWithHome(testHome, { SHELL_MANAGE_E2E_UPDATE_SIM: 'manual' })
 
   await page.getByTestId('sidebar-check-update').click()
   await expect(page.getByTestId('update-banner')).toContainText('发现新版本 99.0.0', { timeout: 5000 })
+  await page.getByTestId('update-banner').click()
+  await expect(page.getByTestId('update-banner')).toContainText('正在下载', { timeout: 3000 })
+  await expect(page.getByTestId('update-banner')).toContainText('正在准备更新 30%', { timeout: 3000 })
 })
 
 async function launchWithHome(homeDir: string, extraEnv: Record<string, string>): Promise<void> {

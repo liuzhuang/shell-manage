@@ -1,6 +1,6 @@
 # 开发与部署
 
-本文档说明 ShellManage 桌面应用与官网的本地开发、构建和发布流程。
+本文档说明 ShellManage 桌面应用与官网的本地开发、构建和部署方式。公开版本操作单独见 [发版说明](RELEASING.md)。
 
 ## 环境要求
 
@@ -55,7 +55,7 @@ npm run build:installer:mac
 npm run verify:installer:mac
 ```
 
-安装包写入 `release/`。本地构建不等同于公开版本。
+构建脚本会先下载固定版本并校验 SHA-256，再从官方源码构建 Sparkle 更新辅助程序。安装包写入 `release/`。本地构建不等同于公开版本。
 
 ## GitHub 自动发版
 
@@ -68,7 +68,7 @@ npm run verify:installer:mac
 - macOS Apple Silicon：`arm64.dmg` 与更新用 ZIP
 - `latest.yml`、`latest-mac.yml` 和 blockmap 更新元数据
 
-当前 workflow 生成未签名预览版，不需要配置 Apple Developer 或 Windows 代码签名 Secrets。macOS 客户端通过 GitHub Releases 检查新版本并引导手动下载；Windows 客户端读取 `latest.yml` 自动下载与安装，但安装程序可能显示「未知发布者」或 SmartScreen 提示。
+当前 workflow 生成未使用平台证书的预览版，不需要配置 Apple Developer 或 Windows 代码签名 Secret。macOS 应用使用不依赖账号的 ad-hoc 签名，以满足应用包完整性校验；该签名不等同于 Developer ID 签名或 Apple 公证。Windows 客户端读取 `latest.yml` 自动下载与安装。macOS 客户端使用 Sparkle 读取架构对应的 `appcast-mac-x64.xml` 或 `appcast-mac-arm64.xml`，并校验 EdDSA 签名后完成替换与重启。公开仓库必须配置 `SPARKLE_PRIVATE_KEY`。
 
 在私有仓库执行发版命令。它会自动增加补丁版本、创建版本提交和 Tag，并推送到私有仓库：
 
@@ -77,6 +77,8 @@ npm run release:patch
 ```
 
 Tag 同步成功后，公开仓库自动构建并公开 Draft Release。Windows 客户端随后从该公开版本读取自动更新元数据。
+
+完整发布步骤、产物清单、桥接版本说明和失败恢复方式见 [发版说明](RELEASING.md)。
 
 ## 发布前检查
 

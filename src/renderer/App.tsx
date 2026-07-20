@@ -1940,6 +1940,7 @@ function formatUpdateTickerText(payload: AppUpdateBroadcastPayload): string | nu
   if (payload.phase === 'checking') return '系统正在检查更新'
   if (payload.phase === 'available') return `发现新版本 ${payload.version}`
   if (payload.phase === 'downloading') return '正在下载更新'
+  if (payload.phase === 'installing') return '正在安装更新，应用即将重启'
   if (payload.phase === 'downloaded') return `新版本 ${payload.version} 已下载完成`
   if (payload.phase === 'error') {
     const short = payload.message.slice(0, 48)

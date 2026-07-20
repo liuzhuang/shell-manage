@@ -730,5 +730,6 @@ export type AppUpdateBroadcastPayload =
       total: number
       bytesPerSecond: number
     }
+  | { phase: 'installing'; percent?: number }
   | { phase: 'downloaded'; version: string }
   | { phase: 'error'; message: string }

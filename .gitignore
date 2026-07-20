@@ -2,6 +2,8 @@ node_modules/
 dist/
 dist-website/
 release/
+build/sparkle/
+build/sparkle-tools/
 playwright-report/
 test-results/
 .vite/

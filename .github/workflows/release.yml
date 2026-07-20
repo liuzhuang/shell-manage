@@ -9,12 +9,13 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
   prepare:
     name: Prepare release
+    if: github.repository == 'liuzhuang/shell-manage'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.prepare.outputs.version }}
@@ -62,11 +63,52 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Build unsigned installers and update metadata
+      - name: Check Sparkle signing key
+        if: runner.os == 'macOS'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: test -n "$SPARKLE_PRIVATE_KEY" || { echo "Missing SPARKLE_PRIVATE_KEY"; exit 1; }
+      - name: Prepare Sparkle updater
+        if: runner.os == 'macOS'
+        run: bash scripts/prepare-sparkle.sh client
+      - name: Build installers and update metadata
         env:
           GH_TOKEN: ${{ github.token }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder ${{ matrix.target }} --publish always
+      - name: Generate and upload signed Sparkle appcasts
+        if: runner.os == 'macOS'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          bash scripts/prepare-sparkle.sh tools
+          APPCAST_ROOT="$RUNNER_TEMP/shell-manage-appcast"
+          mkdir -p "$APPCAST_ROOT/x64" "$APPCAST_ROOT/arm64"
+          cp "release/ShellManage-${VERSION}-mac.zip" "$APPCAST_ROOT/x64/"
+          cp "release/ShellManage-${VERSION}-arm64-mac.zip" "$APPCAST_ROOT/arm64/"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | build/sparkle-tools/bin/generate_appcast \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/liuzhuang/shell-manage/releases/download/${TAG}/" \
+            --maximum-deltas 0 \
+            -o release/appcast-mac-x64.xml \
+            "$APPCAST_ROOT/x64"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" | build/sparkle-tools/bin/generate_appcast \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/liuzhuang/shell-manage/releases/download/${TAG}/" \
+            --maximum-deltas 0 \
+            -o release/appcast-mac-arm64.xml \
+            "$APPCAST_ROOT/arm64"
+          grep -q 'sparkle:edSignature' release/appcast-mac-x64.xml
+          grep -q 'sparkle:edSignature' release/appcast-mac-arm64.xml
+          grep -q 'sparkle-signatures:' release/appcast-mac-x64.xml
+          grep -q 'sparkle-signatures:' release/appcast-mac-arm64.xml
+          gh release upload "$TAG" \
+            release/appcast-mac-x64.xml \
+            release/appcast-mac-arm64.xml \
+            --clobber
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -76,6 +118,7 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest*.yml
+            release/appcast-mac-*.xml
           if-no-files-found: error
 
   release:
@@ -85,6 +128,27 @@ jobs:
       - build
     runs-on: ubuntu-latest
     steps:
+      - name: Verify release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          ASSETS="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          for REQUIRED in \
+            "ShellManage-${VERSION}-x64-setup.exe" \
+            "ShellManage-${VERSION}-x64.dmg" \
+            "ShellManage-${VERSION}-arm64.dmg" \
+            "ShellManage-${VERSION}-mac.zip" \
+            "ShellManage-${VERSION}-arm64-mac.zip" \
+            latest.yml \
+            latest-mac.yml \
+            appcast-mac-x64.xml \
+            appcast-mac-arm64.xml
+          do
+            printf '%s\n' "$ASSETS" | grep -Fxq "$REQUIRED" || { echo "Missing release asset: $REQUIRED"; exit 1; }
+          done
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -373,6 +373,10 @@ export function Sidebar({
         ? `发现新版本 ${updateUi.version}`
         : updateUi?.phase === 'downloading'
           ? `正在下载 ${Math.round(updateUi.percent)}%`
+          : updateUi?.phase === 'installing'
+            ? updateUi.percent == null
+              ? '正在安装更新…'
+              : `正在准备更新 ${Math.round(updateUi.percent)}%`
           : updateUi?.phase === 'downloaded'
             ? `版本 ${updateUi.version} 已就绪`
             : updateUi?.phase === 'not-available'
