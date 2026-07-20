@@ -178,9 +178,9 @@ export function HomePage(props: {
               }}
             >
             {tags.map((tag) => (
-              <button
-                data-testid={`tag-${tag}`}
-                key={tag}
+              <button 
+                data-testid={`tag-${tag}`} 
+                key={tag} 
                 draggable={tag !== '全部'}
                 style={{
                   ...chipStyle(activeTag === tag),
@@ -192,7 +192,7 @@ export function HomePage(props: {
                   padding: '7px 14px',
                   lineHeight: 1,
                   whiteSpace: 'nowrap'
-                }}
+                }} 
                 onClick={() => onTagChange(tag)}
                 onDragStart={(event) => {
                   if (tag === '全部') return
@@ -441,15 +441,15 @@ export function HomePage(props: {
             (typeof status?.exitCode === 'number' && !isRunning) ||
             (typeof status?.restarts === 'number' && status.restarts > 0)
           return (
-            <Panel
-              key={cmd.name}
-              soft
+            <Panel 
+              key={cmd.name} 
+              soft 
               className="panel-card"
-              style={{
+              style={{ 
                 ['--card-index' as string]: String(index),
                 padding: '16px 18px 14px',
-                display: 'flex',
-                flexDirection: 'column',
+                display: 'flex', 
+                flexDirection: 'column', 
                 gap: 10,
                 height: 124,
                 background: isRunning
@@ -595,7 +595,7 @@ export function HomePage(props: {
                   <button
                     className="command-card-action"
                     data-testid={`command-run-${cmd.name}`}
-                    style={{
+                    style={{ 
                       ...buttonStyle('outline'),
                       ['--press-scale' as string]: '0.964',
                       padding: '2px 8px 2px 0',

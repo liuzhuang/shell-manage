@@ -59,7 +59,9 @@ npm run verify:installer:mac
 
 ## GitHub 自动发版
 
-`.github/workflows/release.yml` 只允许从默认分支手动触发。workflow 自动增加补丁版本号，构建以下产物并发布到 GitHub Releases：
+私有仓库推送 `v*` Tag 后，`.github/workflows/sync-public.yml` 会自动执行 `scripts/sync-to-public.sh`，将该 Tag 对应且允许公开的源码同步到 `liuzhuang/shell-manage`，再推送同名 Tag。公开仓库收到 Tag 后自动构建并发布 GitHub Release。在私有仓库 Actions Secrets 中配置对公开仓库具有 Contents 与 Workflows 读写权限的 fine-grained token：`PUBLIC_REPO_TOKEN`。
+
+`.github/workflows/release.yml` 由公开仓库的 `v*` Tag 触发，版本号必须与 `package.json` 一致，并构建以下产物发布到 GitHub Releases：
 
 - Windows x64：NSIS `.exe`
 - macOS Intel：`x64.dmg` 与更新用 ZIP
@@ -68,13 +70,13 @@ npm run verify:installer:mac
 
 当前 workflow 生成未签名预览版，不需要配置 Apple Developer 或 Windows 代码签名 Secrets。macOS 客户端通过 GitHub Releases 检查新版本并引导手动下载；Windows 客户端读取 `latest.yml` 自动下载与安装，但安装程序可能显示「未知发布者」或 SmartScreen 提示。
 
-触发命令：
+在私有仓库执行发版命令。它会自动增加补丁版本、创建版本提交和 Tag，并推送到私有仓库：
 
 ```bash
-gh workflow run release.yml --repo liuzhuang/shell-manage --ref main
+npm run release:patch
 ```
 
-构建成功后，workflow 提交版本更新并公开 Draft Release。Windows 客户端随后从该公开版本读取自动更新元数据。
+Tag 同步成功后，公开仓库自动构建并公开 Draft Release。Windows 客户端随后从该公开版本读取自动更新元数据。
 
 ## 发布前检查
 

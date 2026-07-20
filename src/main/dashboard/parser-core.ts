@@ -48,3 +48,4 @@ export function parseProbeOutput(parserRule: WidgetSpec['parserRule'] | undefine
 
   return raw
 }
+

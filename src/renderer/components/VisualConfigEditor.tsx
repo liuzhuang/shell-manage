@@ -101,7 +101,7 @@ export function VisualConfigEditor({ value, onChange }: VisualConfigEditorProps)
     if (field === 'command' && typeof val === 'string') {
       const isTerminal = /(^|\s)(ssh|mysql|redis-cli|top|vim|htop|telnet)(\s|$)/.test(val)
       const isService = /(^|\s)(npm run|yarn|node|nodemon|pnpm|go run|python|flask)(\s|$)/.test(val)
-
+      
       // 如果推断出明确的类型，则自动切换，减轻用户决策
       if (isTerminal) updatedCmd.mode = 'terminal'
       else if (isService) updatedCmd.mode = 'service'
@@ -341,7 +341,7 @@ export function VisualConfigEditor({ value, onChange }: VisualConfigEditorProps)
               {renderSshKeySelector(cmd, idx)}
               <div>
                 <label style={secondaryLabelStyle}>
-                  标签 (Tags)
+                  标签 (Tags) 
                   <span style={{color: 'var(--muted)', fontWeight: 'normal', textTransform: 'none', marginLeft: 4}}>
                     (选填)
                   </span>
@@ -350,10 +350,10 @@ export function VisualConfigEditor({ value, onChange }: VisualConfigEditorProps)
                   style={compactInputStyle}
                   value={cmd.tags?.join(', ') || ''}
                   placeholder="输入标签词用于分类和搜索（例如: 前端, 后端, util）"
-                  onChange={e => handleCommandChange(idx, 'tags', e.target.value.split(',').map(s => s.trim()).filter(Boolean))}
+                  onChange={e => handleCommandChange(idx, 'tags', e.target.value.split(',').map(s => s.trim()).filter(Boolean))} 
                 />
               </div>
-              <button
+              <button 
                 onClick={() => removeCommand(idx)}
                 style={floatingDeleteButtonStyle}
               >

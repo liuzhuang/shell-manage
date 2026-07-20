@@ -122,3 +122,4 @@ export function WidgetFactory({ kind, data }: WidgetFactoryProps) {
     </div>
   )
 }
+
