@@ -1,11 +1,12 @@
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { AppUpdateBroadcastPayload, AppUpdateDisabledReason } from '../shared/types'
 
 const STATUS_CHANNEL = 'app-update:status'
+const RELEASE_URL = 'https://github.com/liuzhuang/shell-manage/releases/latest'
 
 /** Playwright：在未打包环境下模拟一次「手动检查 → 已是最新」流程（不设则走下方禁用逻辑） */
-const E2E_UPDATE_SIM = process.env.SHELL_MANAGE_E2E_UPDATE_SIM === '1'
+const E2E_UPDATE_SIM = process.env.SHELL_MANAGE_E2E_UPDATE_SIM
 function registerDisabledAutoUpdateHandlers(reason: AppUpdateDisabledReason): void {
   ipcMain.handle('app-update:check', async () => {
     return { ok: false as const, reason }
@@ -24,6 +25,7 @@ function registerE2eAutoUpdateHandlers(broadcast: (channel: string, payload: unk
   }
 
   ipcMain.handle('app-update:download', async () => {
+    if (E2E_UPDATE_SIM === 'manual') return { ok: true as const }
     return { ok: false as const, reason: 'not-packaged' as const }
   })
 
@@ -31,7 +33,11 @@ function registerE2eAutoUpdateHandlers(broadcast: (channel: string, payload: unk
     send({ phase: 'checking' })
     // 留出时间让 E2E 能稳定断言顶栏「检查中」状态
     await new Promise((r) => setTimeout(r, 450))
-    send({ phase: 'not-available', fromManual: Boolean(opts?.manual) })
+    send(
+      E2E_UPDATE_SIM === 'manual'
+        ? { phase: 'available', version: '99.0.0' }
+        : { phase: 'not-available', fromManual: Boolean(opts?.manual) }
+    )
     return { ok: true as const }
   })
   ipcMain.handle('app-update:quit-and-install', async () => {
@@ -40,12 +46,12 @@ function registerE2eAutoUpdateHandlers(broadcast: (channel: string, payload: unk
 }
 
 export function setupAutoUpdater(broadcast: (channel: string, payload: unknown) => void): void {
-  if (E2E_UPDATE_SIM) {
+  if (E2E_UPDATE_SIM === '1' || E2E_UPDATE_SIM === 'manual') {
     registerE2eAutoUpdateHandlers(broadcast)
     return
   }
 
-  if (process.platform !== 'win32') {
+  if (process.platform !== 'win32' && process.platform !== 'darwin') {
     registerDisabledAutoUpdateHandlers('unsupported-platform')
     return
   }
@@ -65,9 +71,10 @@ export function setupAutoUpdater(broadcast: (channel: string, payload: unknown) 
   let pendingManualCheck = false
   /** 已出现「有新版本」或正在下载时，后台错误须推到界面（否则只打日志，顶栏会一直停在「发现新版本」） */
   let updatePipelineActive = false
+  const manualDownload = process.platform === 'darwin'
 
-  autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoDownload = !manualDownload
+  autoUpdater.autoInstallOnAppQuit = !manualDownload
 
   autoUpdater.on('checking-for-update', () => {
     send({ phase: 'checking' })
@@ -86,8 +93,8 @@ export function setupAutoUpdater(broadcast: (channel: string, payload: unknown) 
             ? String(info.releaseDate)
             : undefined
     })
-    // 部分环境下仅依赖 autoDownload 不会可靠触发下载，显式拉取一次
-    void autoUpdater.downloadUpdate()
+    // Windows 显式拉取；未签名 macOS 只能引导用户下载安装包
+    if (!manualDownload) void autoUpdater.downloadUpdate()
   })
 
   autoUpdater.on('update-not-available', () => {
@@ -138,11 +145,16 @@ export function setupAutoUpdater(broadcast: (channel: string, payload: unknown) 
   })
 
   ipcMain.handle('app-update:quit-and-install', () => {
+    if (manualDownload) return { ok: false as const, reason: 'unsupported-platform' as const }
     autoUpdater.quitAndInstall(false, true)
     return { ok: true as const }
   })
 
   ipcMain.handle('app-update:download', async () => {
+    if (manualDownload) {
+      await shell.openExternal(RELEASE_URL)
+      return { ok: true as const }
+    }
     try {
       await autoUpdater.downloadUpdate()
       return { ok: true as const }

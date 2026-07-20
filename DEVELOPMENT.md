@@ -66,7 +66,7 @@ npm run verify:installer:mac
 - macOS Apple Silicon：`arm64.dmg` 与更新用 ZIP
 - `latest.yml`、`latest-mac.yml` 和 blockmap 更新元数据
 
-当前 workflow 生成未签名预览版，不需要配置 Apple Developer 或 Windows 代码签名 Secrets。macOS 客户端不启用自动更新，需要从 GitHub Releases 手动下载安装；Windows 客户端继续读取 `latest.yml`，但安装程序可能显示「未知发布者」或 SmartScreen 提示。
+当前 workflow 生成未签名预览版，不需要配置 Apple Developer 或 Windows 代码签名 Secrets。macOS 客户端通过 GitHub Releases 检查新版本并引导手动下载；Windows 客户端读取 `latest.yml` 自动下载与安装，但安装程序可能显示「未知发布者」或 SmartScreen 提示。
 
 触发命令：
 
