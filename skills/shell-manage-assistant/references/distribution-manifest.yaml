@@ -1,0 +1,28 @@
+# TEMPLATE ONLY - NOT FOR PRODUCTION INSTALLATION.
+# This manifest intentionally contains placeholder URLs and SHA256 values.
+# Replace every placeholder with real release metadata before any install/upgrade guidance.
+schemaVersion: 1
+product: shell-manage
+updatedAt: 2026-06-01
+channels:
+  stable:
+    version: "0.0.0"
+    macos:
+      arm64:
+        url: "https://example.com/shell-manage/releases/latest/shell-manage-macos-arm64.dmg"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+      x64:
+        url: "https://example.com/shell-manage/releases/latest/shell-manage-macos-x64.dmg"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+  beta:
+    version: "0.0.0-beta.1"
+    macos:
+      arm64:
+        url: "https://example.com/shell-manage/releases/beta/shell-manage-macos-arm64.dmg"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+      x64:
+        url: "https://example.com/shell-manage/releases/beta/shell-manage-macos-x64.dmg"
+        sha256: "REPLACE_WITH_REAL_SHA256"
+fallback:
+  releasePage: "https://example.com/shell-manage/releases"
+  docs: "https://example.com/shell-manage/docs/install"

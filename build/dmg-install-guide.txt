@@ -1,0 +1,7 @@
+ShellManage 安装提示
+
+1) 将左侧 ShellManage.app 拖动到右侧 Applications
+2) 等待拷贝完成（大体积应用可能需要几十秒）
+3) 打开“应用程序”并启动 ShellManage
+
+如果已安装旧版本，系统可能会提示是否替换，选择“替换”即可。

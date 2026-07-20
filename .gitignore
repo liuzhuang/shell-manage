@@ -1,0 +1,16 @@
+node_modules/
+dist/
+dist-website/
+release/
+playwright-report/
+test-results/
+.vite/
+*.log
+.DS_Store
+coverage/
+.env
+.env.*
+remotion/
+hyperframes/
+.idea/
+.superpowers/

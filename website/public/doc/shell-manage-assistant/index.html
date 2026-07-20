@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>用 Agent 导入 ShellManage 命令</title>
+    <link rel="stylesheet" href="/doc/doc.css" />
+  </head>
+  <body>
+    <header class="doc-header">
+      <a class="doc-header__brand" href="/">ShellManage</a>
+      <a href="/">返回官网</a>
+    </header>
+    <main class="doc-main">
+      <p class="eyebrow">Assistant Skill</p>
+      <h1>用 Agent 导入项目命令</h1>
+      <p class="lead">Agent 会分析当前项目、验证启动命令，并把可运行的命令写入已经安装好的 ShellManage。</p>
+
+      <section class="doc-step">
+        <h2>01　确认软件已安装</h2>
+        <p>先启动 ShellManage，确认 <code>~/.shell-manage/config.yaml</code> 已经创建。</p>
+      </section>
+
+      <section class="doc-step">
+        <h2>02　发送导入指令</h2>
+        <p>在当前项目的 Agent 对话窗口发送官网提供的导入指令。Agent 会读取 Markdown 文档并执行分析、验证和写入。</p>
+        <pre>请阅读 &lt;官网域名&gt;/doc/shell-manage-assistant.md，按照文档分析当前项目，并将验证通过的启动命令导入 ShellManage。</pre>
+      </section>
+
+      <section class="doc-step">
+        <h2>03　启动并检查日志</h2>
+        <p>回到 ShellManage，找到新命令并启动。看到实时日志后，首次上手即完成。</p>
+      </section>
+
+      <nav class="doc-links" aria-label="相关文档">
+        <a href="/doc/shell-manage-assistant.md">Agent 读取版本</a>
+        <a href="/doc/install/">查看软件安装说明</a>
+      </nav>
+    </main>
+  </body>
+</html>

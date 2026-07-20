@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="Shell Manage Dock Icon - Spectrum Stack">
+  <defs>
+    <linearGradient id="C_bgFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f3f4f7"/>
+    </linearGradient>
+    <radialGradient id="C_bgTop" cx="0.5" cy="-0.05" r="0.7">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="C_topGlow" cx="0.5" cy="0.05" r="0.65">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#60a5fa" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#60a5fa" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="C_yaml" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#fbeacf"/>
+    </linearGradient>
+    <linearGradient id="C_term" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#272a30"/>
+      <stop offset="1" stop-color="#15171b"/>
+    </linearGradient>
+    <linearGradient id="C_termTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3f46"/>
+      <stop offset="1" stop-color="#272a30"/>
+    </linearGradient>
+    <linearGradient id="C_star" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffd082"/>
+      <stop offset="1" stop-color="#ff9f0a"/>
+    </linearGradient>
+    <radialGradient id="C_starGlow" cx="0.5" cy="0.5" r="0.7">
+      <stop offset="0" stop-color="#ff9f0a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ff9f0a" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="C_yamlShadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#7a5d2a" flood-opacity="0.20"/>
+    </filter>
+    <filter id="C_termShadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#0e1116" flood-opacity="0.22"/>
+    </filter>
+    <clipPath id="C_squircleClip">
+      <rect x="60" y="60" width="904" height="904" rx="224" ry="224"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#C_squircleClip)">
+    <rect x="60" y="60" width="904" height="904" rx="224" ry="224" fill="url(#C_bgFill)"/>
+    <rect x="60" y="60" width="904" height="904" rx="224" ry="224" fill="url(#C_bgTop)"/>
+    <rect x="60" y="60" width="904" height="904" rx="224" ry="224" fill="url(#C_topGlow)"/>
+
+    <g filter="url(#C_yamlShadow)" transform="rotate(-6 512 600)">
+      <rect x="220" y="372" width="592" height="436" rx="46" ry="46" fill="url(#C_yaml)" stroke="#ead7b1" stroke-width="2"/>
+      <rect x="262" y="426" width="14" height="14" rx="3" ry="3" fill="#0071e3"/>
+      <rect x="294" y="424" width="190" height="18" rx="9" ry="9" fill="#3c3a36"/>
+      <rect x="294" y="452" width="120" height="14" rx="7" ry="7" fill="#8a8579"/>
+
+      <rect x="278" y="494" width="14" height="14" rx="3" ry="3" fill="#a78bfa"/>
+      <rect x="306" y="492" width="240" height="18" rx="9" ry="9" fill="#3c3a36"/>
+      <rect x="306" y="520" width="160" height="14" rx="7" ry="7" fill="#8a8579"/>
+
+      <rect x="262" y="566" width="14" height="14" rx="3" ry="3" fill="#28c840"/>
+      <rect x="294" y="564" width="200" height="18" rx="9" ry="9" fill="#3c3a36"/>
+      <rect x="294" y="592" width="140" height="14" rx="7" ry="7" fill="#8a8579"/>
+
+      <rect x="278" y="636" width="14" height="14" rx="3" ry="3" fill="#ff9f0a"/>
+      <rect x="306" y="634" width="170" height="18" rx="9" ry="9" fill="#3c3a36"/>
+      <rect x="306" y="662" width="118" height="14" rx="7" ry="7" fill="#8a8579"/>
+
+      <rect x="278" y="708" width="14" height="14" rx="3" ry="3" fill="#ff5f57"/>
+      <rect x="306" y="706" width="220" height="18" rx="9" ry="9" fill="#3c3a36"/>
+    </g>
+
+    <g filter="url(#C_termShadow)" transform="rotate(5 512 560)">
+      <rect x="216" y="332" width="592" height="372" rx="56" ry="56" fill="url(#C_term)"/>
+      <path d="M216 388v-56a56 56 0 0 1 56-56h480a56 56 0 0 1 56 56v56z" fill="url(#C_termTop)"/>
+      <circle cx="270" cy="360" r="13" fill="#ff5f57"/>
+      <circle cx="306" cy="360" r="13" fill="#febc2e"/>
+      <circle cx="342" cy="360" r="13" fill="#28c840"/>
+      <line x1="216" y1="396" x2="808" y2="396" stroke="#0a0c0e" stroke-opacity="0.55" stroke-width="2"/>
+      <path d="M306 466 L406 540 L306 614" stroke="#28c840" stroke-width="34" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="430" y="596" width="124" height="22" rx="11" ry="11" fill="#28c840"/>
+      <rect x="572" y="596" width="172" height="22" rx="11" ry="11" fill="#28c840" fill-opacity="0.32"/>
+    </g>
+
+    <g transform="translate(800 240)">
+      <circle r="98" fill="url(#C_starGlow)"/>
+      <path d="M0 -60 L15 -15 L60 0 L15 15 L0 60 L-15 15 L-60 0 L-15 -15 Z" fill="url(#C_star)"/>
+      <path d="M42 -52 L48 -36 L64 -30 L48 -24 L42 -8 L36 -24 L20 -30 L36 -36 Z" fill="#fff7e6" opacity="0.92"/>
+    </g>
+  </g>
+
+  <rect x="60.5" y="60.5" width="903" height="903" rx="223.5" ry="223.5" fill="none" stroke="#e5e7eb" stroke-width="1"/>
+</svg>

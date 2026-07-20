@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>终端管理</title>
+    <script>
+      ;(() => {
+        try {
+          const raw = window.localStorage.getItem('shell-manage-theme')
+          const theme = raw === 'dark' ? 'dark' : 'light'
+          document.documentElement.dataset.theme = theme
+          document.documentElement.style.background = theme === 'light' ? '#fafafa' : '#121417'
+        } catch {
+          document.documentElement.dataset.theme = 'light'
+          document.documentElement.style.background = '#fafafa'
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>

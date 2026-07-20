@@ -1,0 +1,172 @@
+{
+  "name": "shell-manage",
+  "version": "1.0.4",
+  "description": "Manage repeatable development commands, logs, terminals, monitoring, and SSH workflows from one desktop app.",
+  "homepage": "https://github.com/liuzhuang/shell-manage#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liuzhuang/shell-manage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/liuzhuang/shell-manage/issues"
+  },
+  "main": "dist/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "website:dev": "vite --config website/vite.config.ts",
+    "website:typecheck": "tsc -p website/tsconfig.json --noEmit",
+    "website:build": "npm run website:typecheck && vite build --config website/vite.config.ts",
+    "website:preview": "vite preview --config website/vite.config.ts",
+    "test:website": "npm run website:build && playwright test --config website/playwright.config.ts",
+    "build:installer:mac": "bash scripts/build-installer.sh",
+    "install:installer:mac": "bash scripts/install-from-dmg.sh",
+    "build:install:mac": "bash scripts/build-install-mac.sh",
+    "verify:installer:mac": "bash scripts/verify-installer.sh",
+    "e2e:installer:mac": "npm run build:installer:mac && npm run verify:installer:mac",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "test:browser-profile-import": "node --test src/main/browser-profile-importer.test.ts",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:headed": "npm run build && playwright test --headed",
+    "test:e2e:layout:video": "npm run build && playwright test --config=playwright.video.config.ts -g \"@layout-stability\"",
+    "rebuild:native": "electron-rebuild -f -w node-pty,better-sqlite3",
+    "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3",
+    "bump:patch": "npm version patch --no-git-tag-version",
+    "bump:minor": "npm version minor --no-git-tag-version",
+    "bump:major": "npm version major --no-git-tag-version"
+  },
+  "keywords": [
+    "electron",
+    "developer-tools",
+    "shell",
+    "desktop"
+  ],
+  "author": "liuzhuang",
+  "license": "ISC",
+  "build": {
+    "appId": "com.liuzhuang.shell-manage",
+    "productName": "ShellManage",
+    "asar": true,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/icons",
+        "to": "icons",
+        "filter": [
+          "icon.png",
+          "trayTemplate.png",
+          "trayTemplate@2x.png"
+        ]
+      },
+      {
+        "from": "resources/browser-pages",
+        "to": "browser-pages"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icons/icon.icns",
+      "hardenedRuntime": true,
+      "notarize": true
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
+    },
+    "dmg": {
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "title": "安装提示：将 ShellManage 拖动到 Applications",
+      "iconSize": 110,
+      "window": {
+        "width": 620,
+        "height": 420
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 190,
+          "type": "file"
+        },
+        {
+          "x": 430,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 285,
+          "y": 340,
+          "type": "file",
+          "path": "build/dmg-install-guide.txt"
+        }
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "liuzhuang",
+      "repo": "shell-manage",
+      "releaseType": "draft"
+    }
+  },
+  "dependencies": {
+    "@codemirror/lang-yaml": "^6.1.3",
+    "@codemirror/lint": "^6.9.5",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.41.0",
+    "@langchain/anthropic": "^1.3.26",
+    "@langchain/core": "^1.1.39",
+    "@langchain/langgraph": "^1.2.8",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.0.1",
+    "@langchain/openai": "^1.4.2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "better-sqlite3": "^12.8.0",
+    "chokidar": "^5.0.0",
+    "codemirror": "^6.0.2",
+    "deepagents": "^1.9.0",
+    "electron-updater": "^6.8.3",
+    "js-yaml": "^4.1.1",
+    "langchain": "^1.3.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "shell-env": "^4.0.3",
+    "shell-quote": "1.8.3",
+    "tree-kill": "^1.2.2"
+  },
+  "overrides": {
+    "p-retry": "6.2.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@playwright/test": "^1.59.1",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "concurrently": "^9.2.1",
+    "electron": "^31.7.7",
+    "electron-builder": "^26.8.1",
+    "electron-vite": "^5.0.0",
+    "playwright": "^1.59.1",
+    "typescript": "^6.0.2",
+    "vite": "^7.3.1",
+    "wait-on": "^9.0.4"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "skill": "shell-manage-assistant",
+  "version": "1.0.0",
+  "evals": [
+    {
+      "id": "install-arm64",
+      "prompt": "我要怎么下载安装 shell-manage？我是 Apple Silicon Mac。",
+      "expected_behaviors": [
+        "Resolves knowledge root and reads distribution-manifest.yaml",
+        "Selects stable arm64 macOS download URL",
+        "Provides 3-5 install steps with success criteria and rollback path"
+      ]
+    },
+    {
+      "id": "onboard-node-project",
+      "prompt": "帮我把这个 Next.js 项目接入 shell-manage，项目路径是 /Users/dev/my-app",
+      "expected_behaviors": [
+        "Reads package.json scripts before proposing commands",
+        "Proposes cd /Users/dev/my-app && npm run dev style one-liners",
+        "Validates before write; asks confirmation; reports write_status"
+      ]
+    },
+    {
+      "id": "duplicate-command-name",
+      "prompt": "给 shell-manage 新增一个叫 dev 的命令，但配置里已经有 dev 了",
+      "expected_behaviors": [
+        "Detects same-name conflict",
+        "Requires explicit overwrite confirmation",
+        "Does not write without confirmation"
+      ]
+    },
+    {
+      "id": "qa-no-write",
+      "prompt": "shell-manage 怎么用标签筛选命令？",
+      "expected_behaviors": [
+        "Answers usage question without modifying config",
+        "Includes write_status: not_written",
+        "Includes next step, success criteria, and rollback note"
+      ]
+    },
+    {
+      "id": "upgrade-rollback",
+      "prompt": "升级 shell-manage 后软件打不开了，怎么回滚？",
+      "expected_behaviors": [
+        "Follows troubleshooting branches from knowledge base",
+        "Checks macOS security gate and architecture mismatch first",
+        "Provides executable rollback steps within 5 steps"
+      ]
+    }
+  ]
+}

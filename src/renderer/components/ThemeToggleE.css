@@ -1,0 +1,77 @@
+.theme-toggle-e {
+  --tte-day-sky-top: color-mix(in srgb, var(--run) 72%, var(--panel));
+  --tte-day-sky-bottom: color-mix(in srgb, var(--run) 38%, var(--bg));
+  --tte-day-land-top: color-mix(in srgb, var(--warn) 55%, var(--accent-soft));
+  --tte-day-land-bottom: color-mix(in srgb, var(--warn) 35%, var(--panel-soft));
+  --tte-day-horizon: color-mix(in srgb, var(--warn) 40%, transparent);
+  --tte-day-sun: var(--accent);
+
+  --tte-night-sky-top: color-mix(in srgb, var(--bg) 88%, var(--run) 12%);
+  --tte-night-sky-bottom: color-mix(in srgb, var(--panel) 70%, var(--bg) 30%);
+  --tte-night-land-top: color-mix(in srgb, var(--panel-soft) 80%, var(--bg));
+  --tte-night-land-bottom: var(--bg);
+  --tte-night-horizon: color-mix(in srgb, var(--border-strong) 50%, transparent);
+  --tte-night-moon: color-mix(in srgb, var(--text) 88%, var(--panel));
+  --tte-night-star: color-mix(in srgb, var(--muted) 70%, var(--text));
+
+  display: inline-flex;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+}
+
+.theme-toggle-e__track {
+  position: relative;
+  display: block;
+  width: 72px;
+  height: 36px;
+  border-radius: 50px;
+  box-sizing: border-box;
+  background: var(--panel-soft);
+  border: 1px solid var(--border-default);
+  transition:
+    background var(--motion-normal) var(--ease-standard),
+    border-color var(--motion-normal) var(--ease-standard);
+}
+
+/* 暗色模式：球在左，展示白昼（蓝天黄地）— 点击切到浅色 */
+.theme-toggle-e--dark .theme-toggle-e__ball {
+  transform: translateX(0);
+}
+
+/* 浅色模式：球在右，展示乡夜 — 点击切到暗色 */
+.theme-toggle-e--light .theme-toggle-e__ball {
+  transform: translateX(36px);
+}
+
+.theme-toggle-e__ball {
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  top: 4px;
+  left: 4px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 1.5px solid color-mix(in srgb, var(--text) 18%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.3s ease-out;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: var(--shadow-card);
+}
+
+.theme-toggle-e__ball svg {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.theme-toggle-e:focus-visible .theme-toggle-e__track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

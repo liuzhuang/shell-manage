@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      base_version: ${{ steps.prepare.outputs.base_version }}
+      version: ${{ steps.prepare.outputs.version }}
+      commit: ${{ steps.prepare.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - id: prepare
+        env:
+          BRANCH: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          test "$BRANCH" = "$DEFAULT_BRANCH" || { echo "Release must run from $DEFAULT_BRANCH"; exit 1; }
+          test "$(gh api "repos/$GH_REPO" --jq '.private')" = 'false' || { echo "Auto-update requires a public GitHub release repository"; exit 1; }
+          : "${MAC_CSC_LINK:?Missing GitHub secret MAC_CSC_LINK}"
+          : "${MAC_CSC_KEY_PASSWORD:?Missing GitHub secret MAC_CSC_KEY_PASSWORD}"
+          : "${APPLE_ID:?Missing GitHub secret APPLE_ID}"
+          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing GitHub secret APPLE_APP_SPECIFIC_PASSWORD}"
+          : "${APPLE_TEAM_ID:?Missing GitHub secret APPLE_TEAM_ID}"
+          : "${WIN_CSC_LINK:?Missing GitHub secret WIN_CSC_LINK}"
+          : "${WIN_CSC_KEY_PASSWORD:?Missing GitHub secret WIN_CSC_KEY_PASSWORD}"
+          BASE_VERSION=$(node -p "require('./package.json').version")
+          if [ "$(gh release view "v$BASE_VERSION" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = 'true' ]; then
+            echo "Draft v$BASE_VERSION already exists; use Re-run failed jobs for the interrupted release"
+            exit 1
+          fi
+          npm version patch --no-git-tag-version
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; use Re-run failed jobs for an interrupted release"
+            exit 1
+          fi
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --generate-notes --title "ShellManage $TAG"
+          {
+            echo "base_version=$BASE_VERSION"
+            echo "version=$VERSION"
+            echo "commit=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+            platform: windows
+            target: --win nsis --x64
+          - name: macOS Intel and Apple Silicon
+            runner: macos-15-intel
+            platform: mac
+            target: --mac dmg zip --x64 --arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version
+      - run: npm ci
+      - run: npm run build
+      - name: Build installers and update metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
+        run: npx electron-builder ${{ matrix.target }} --publish always
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            release/*.dmg
+            release/*.exe
+            release/*.zip
+            release/*.blockmap
+            release/latest*.yml
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Publish release
+        env:
+          BASE_VERSION: ${{ needs.prepare.outputs.base_version }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          TAG: v${{ needs.prepare.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          if [ "$CURRENT_VERSION" = "$BASE_VERSION" ]; then
+            test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT" || { echo "$BRANCH changed during the build"; exit 1; }
+            npm version "$VERSION" --no-git-tag-version
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add package.json package-lock.json
+            git commit -m "chore: release $TAG"
+            git push origin "HEAD:$BRANCH"
+          elif [ "$CURRENT_VERSION" != "$VERSION" ] || [ "$(git log -1 --format=%s)" != "chore: release $TAG" ]; then
+            echo "Unexpected version state: $CURRENT_VERSION"
+            exit 1
+          fi
+          gh release edit "$TAG" --target "$(git rev-parse HEAD)" --draft=false --latest --title "ShellManage $TAG"

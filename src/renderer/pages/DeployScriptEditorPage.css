@@ -1,0 +1,465 @@
+.deployTunerPage {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.deployTunerToolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.deployTunerToolbar .spacer {
+  flex: 1;
+}
+
+.deployTunerBackBtn {
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-soft);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.deployTunerBackBtn:hover:not(:disabled) {
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+.deployTunerBackBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.deployTunerHint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.deployTunerBtnPrimary,
+.deployTunerBtnGhost {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 999px;
+  padding: 8px 15px;
+  flex-shrink: 0;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 80ms ease;
+}
+
+.deployTunerBtnPrimary {
+  background: var(--text);
+  color: var(--panel);
+  border: 1.5px solid var(--text);
+}
+
+.deployTunerBtnPrimary:hover:not(:disabled) {
+  opacity: 0.88;
+}
+
+.deployTunerBtnPrimary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.deployTunerBtnGhost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1.5px solid var(--border-default);
+}
+
+.deployTunerBtnGhost:hover:not(:disabled) {
+  border-color: var(--muted);
+  color: var(--text);
+}
+
+.deployTunerBtnPrimary:disabled,
+.deployTunerBtnGhost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.deployTunerCols {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+@media (max-width: 880px) {
+  .deployTunerCols {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+}
+
+.deployPanel {
+  background: var(--panel);
+  border: 1.5px solid var(--border-default);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+@media (max-width: 880px) {
+  .deployPanel {
+    height: auto;
+    min-height: 420px;
+  }
+}
+
+.deployEdToolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  border-bottom: 1.5px solid var(--border-default);
+  background: var(--panel-soft);
+  flex-shrink: 0;
+}
+
+.deployEdLabel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.deployEdToolbar .spacer {
+  flex: 1;
+}
+
+.deployCounter {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--panel);
+  border: 1.5px solid var(--border-default);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.deployEditor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  padding: 18px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: color-mix(in srgb, var(--panel-soft) 42%, var(--panel));
+  color: var(--text);
+  outline: none;
+  caret-color: var(--accent);
+  tab-size: 2;
+  overflow: auto;
+  flex: 1 1 240px;
+  min-height: 0;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 28%, var(--border-default));
+}
+
+.deployEditor:focus-visible {
+  outline: none;
+}
+
+.deployEditor .slot {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-soft));
+  color: color-mix(in srgb, var(--accent) 85%, var(--text));
+  border-radius: 4px;
+  padding: 0 3px;
+  font-weight: 600;
+}
+
+.deployEditor .slot.warn {
+  background: rgba(217, 119, 87, 0.14);
+  color: var(--warn);
+  text-decoration: underline dashed var(--warn) 1.5px;
+  text-underline-offset: 3px;
+}
+
+.deployEditor .sh-comment,
+.deployRendered .sh-comment {
+  color: var(--cm-yaml-comment);
+  font-style: italic;
+}
+
+.deployEditor .sh-string,
+.deployRendered .sh-string {
+  color: var(--cm-yaml-string);
+}
+
+.deployEditor .sh-command,
+.deployRendered .sh-command {
+  color: var(--cm-yaml-bool);
+  font-weight: 600;
+}
+
+.deployEditor .sh-flag,
+.deployRendered .sh-flag {
+  color: var(--cm-yaml-number);
+}
+
+.deployEditor .sh-path,
+.deployRendered .sh-path {
+  color: var(--cm-yaml-tag);
+}
+
+.deployEditor .sh-variable,
+.deployRendered .sh-variable {
+  color: var(--cm-yaml-anchor);
+}
+
+.deployEditor .sh-operator,
+.deployRendered .sh-operator {
+  color: var(--cm-yaml-punct);
+}
+
+.deployEditor .sh-number,
+.deployRendered .sh-number {
+  color: var(--cm-yaml-number);
+}
+
+.deployLegend {
+  border-top: 1.5px solid var(--border-default);
+  padding: 12px 16px 14px;
+  background: var(--panel-soft);
+  flex-shrink: 0;
+}
+
+.deployLegendLabel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.deployLegendChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.deployNameLabel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.deployNameInput {
+  flex: 1;
+  min-width: 120px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel);
+  border: 1.5px solid var(--border-default);
+  border-radius: 10px;
+  padding: 7px 12px;
+  outline: none;
+}
+
+.deployNameInput:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border-default));
+}
+
+.deployNameInput::placeholder {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.deployChip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel-soft));
+  color: color-mix(in srgb, var(--accent) 85%, var(--text));
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deployChipCode {
+  font-weight: 700;
+}
+
+.deployChipHint {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+
+.deployPreviewPanel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.deployPreviewHead {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 2px 2px;
+  flex-shrink: 0;
+}
+
+.deployPreviewBody {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.deploySample {
+  border: 1.5px solid var(--border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.deploySampleHead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 13px;
+  border-bottom: 1.5px solid var(--border-default);
+  background: var(--panel-soft);
+  flex-shrink: 0;
+}
+
+.deployBadge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.deployProjectName {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+}
+
+.deploySampleHead .spacer {
+  flex: 1;
+}
+
+.deployProjectPath {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 2px 8px;
+  border: 1.5px solid var(--border-default);
+  color: var(--text-dim);
+  background: var(--panel);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.deployRendered {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 12px 13px 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: color-mix(in srgb, var(--panel-soft) 42%, var(--panel));
+  border-left: 3px solid color-mix(in srgb, var(--accent) 28%, var(--border-default));
+}
+
+.deployRendered .filled {
+  background: color-mix(in srgb, var(--panel-soft) 75%, transparent);
+  border-radius: 3px;
+  padding: 0 2px;
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+
+.deployRendered .filled.sh-path {
+  color: var(--cm-yaml-tag);
+}
+
+.deployRendered .missing {
+  background: rgba(217, 119, 87, 0.12);
+  color: var(--warn);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+.deployFooter {
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.deployUnknownWarn {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.deployPreviewEmpty {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+  overflow: auto;
+  flex: 1 1 0;
+  min-height: 0;
+}

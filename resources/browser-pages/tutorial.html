@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>快速教程 · ShellManage</title>
+  <script>
+    document.documentElement.dataset.theme = new URLSearchParams(location.search).get('theme') === 'light' ? 'light' : 'dark'
+  </script>
+  <style>
+    :root {
+      --page-bg: #111315;
+      --panel-bg: #1d1f22;
+      --text: #faf9f6;
+      --muted: #c8c7c5;
+      --dim: #afaeac;
+      --border: rgba(226,226,226,.14);
+      --accent: #60a5fa;
+      --accent-text: #93c5fd;
+      --accent-soft: rgba(96,165,250,.12);
+      --code-bg: #242629;
+      --link-panel: #1d1f22;
+    }
+    :root[data-theme="light"] {
+      --page-bg: #f6f7fb;
+      --panel-bg: #ffffff;
+      --text: #1f2933;
+      --muted: #52616f;
+      --dim: #667381;
+      --border: rgba(31,41,51,.12);
+      --accent: #2563eb;
+      --accent-text: #2563eb;
+      --accent-soft: rgba(37,99,235,.1);
+      --code-bg: #f1f5f9;
+      --link-panel: #ffffff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      background: var(--page-bg);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 30px 20px 44px;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; }
+    .back { display: inline-block; font-size: 12px; color: var(--accent); text-decoration: none; margin-bottom: 18px; }
+    .back:hover { text-decoration: underline; }
+    h1 { font-size: 24px; line-height: 1.35; margin-bottom: 8px; }
+    .lead { color: var(--dim); font-size: 14px; margin-bottom: 24px; }
+    .timeline { display: grid; gap: 12px; }
+    .step {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 14px;
+      padding: 16px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .num {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent-soft);
+      color: var(--accent-text);
+      font-weight: 700;
+      font-size: 13px;
+    }
+    h2 { font-size: 16px; margin-bottom: 5px; }
+    p, li { font-size: 13px; color: var(--muted); }
+    ul { padding-left: 18px; margin-top: 8px; }
+    code, kbd {
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: 11px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--code-bg);
+      color: var(--text);
+    }
+    code { padding: 1px 5px; }
+    kbd { padding: 1px 6px; }
+    .callout {
+      margin-top: 22px;
+      padding: 16px;
+      background: var(--accent-soft);
+      border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+      border-radius: 8px;
+    }
+    .callout strong { display: block; font-size: 13px; margin-bottom: 4px; }
+    .next {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .next a {
+      color: var(--text);
+      text-decoration: none;
+      background: var(--link-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+    }
+    .next a:hover { border-color: var(--accent); }
+  </style>
+</head>
+<body data-testid="browser-page-tutorial">
+  <main class="wrap">
+    <a class="back" href="newtab.html">返回起始页</a>
+    <h1>5 分钟完成首次成功</h1>
+    <p class="lead">不需要准备项目或配置 AI。通过内置演示命令完成一次启动，并在日志页看到持续输出。</p>
+
+    <section class="timeline">
+      <article class="step">
+        <div class="num">1</div>
+        <div>
+          <h2>打开添加命令</h2>
+          <p>进入「命令」页，选择「＋ 添加命令」。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="num">2</div>
+        <div>
+          <h2>导入演示命令</h2>
+          <p>选择「导入演示命令」并确认。应用会加入 <code>demo-service</code>、<code>demo-bad-exit</code>、<code>demo-terminal</code> 和两组演示预设，不覆盖已有命令。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="num">3</div>
+        <div>
+          <h2>启动后台演示</h2>
+          <p>选择「演示」标签，在 <code>demo-service</code> 卡片上启动命令。卡片状态会变为「正在运行」。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="num">4</div>
+        <div>
+          <h2>确认实时日志</h2>
+          <p>打开 <code>demo-service</code> 的「查看日志」。日志出现 <code>demo-service started</code> 和持续增加的 <code>demo-service tick</code>，即完成首次成功。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="num">5</div>
+        <div>
+          <h2>完成后停止并继续体验</h2>
+          <p>先确认上一步已经达到完成标准。需要结束演示时，再选择「停止运行」结束 <code>demo-service</code>；随后可启动 <code>demo-bad-exit</code> 查看异常退出，或打开 <code>demo-terminal</code> 了解终端会话。</p>
+        </div>
+      </article>
+    </section>
+
+    <div class="callout">
+      <strong>完成标准</strong>
+      <p>停止前，<code>demo-service</code> 曾处于「运行中」，日志中出现 <code>demo-service started</code> 和持续增加的 <code>demo-service tick</code>。</p>
+    </div>
+
+    <nav class="next">
+      <a href="promo.html">核对产品能力</a>
+      <a href="newtab.html">返回起始页</a>
+    </nav>
+  </main>
+</body>
+</html>
