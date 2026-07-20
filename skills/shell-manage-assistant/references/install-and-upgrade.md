@@ -85,9 +85,9 @@ npm run verify:installer:mac
 
 ## 自动更新
 
-正式安装包通过 GitHub Releases 检查更新。Windows 使用 `latest.yml`，macOS 使用 `latest-mac.yml`；发布配置和操作要求见 [`docs/github-release.md`](../../../docs/github-release.md)。
+公开版本使用 GitHub Releases。Windows 客户端读取 `latest.yml` 检查更新；当前 macOS 产物未签名，不启用自动更新，需要从 Release 页面手动下载安装。公开仓库的发布配置见 [`DEVELOPMENT.md`](../../../DEVELOPMENT.md)。
 
-目标仓库仍为 Private 或 Release 尚未完成公开核验时，不能把源码中的更新能力描述为可用的公开更新服务。
+Release 尚未完成公开核验时，不能把源码中的更新能力描述为可用的公开更新服务。
 
 ## Skill 返回格式
 

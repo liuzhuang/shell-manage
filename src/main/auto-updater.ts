@@ -45,7 +45,7 @@ export function setupAutoUpdater(broadcast: (channel: string, payload: unknown) 
     return
   }
 
-  if (process.platform !== 'darwin' && process.platform !== 'win32') {
+  if (process.platform !== 'win32') {
     registerDisabledAutoUpdateHandlers('unsupported-platform')
     return
   }

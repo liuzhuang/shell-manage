@@ -28,23 +28,9 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
           test "$BRANCH" = "$DEFAULT_BRANCH" || { echo "Release must run from $DEFAULT_BRANCH"; exit 1; }
-          test "$(gh api "repos/$GH_REPO" --jq '.private')" = 'false' || { echo "Auto-update requires a public GitHub release repository"; exit 1; }
-          : "${MAC_CSC_LINK:?Missing GitHub secret MAC_CSC_LINK}"
-          : "${MAC_CSC_KEY_PASSWORD:?Missing GitHub secret MAC_CSC_KEY_PASSWORD}"
-          : "${APPLE_ID:?Missing GitHub secret APPLE_ID}"
-          : "${APPLE_APP_SPECIFIC_PASSWORD:?Missing GitHub secret APPLE_APP_SPECIFIC_PASSWORD}"
-          : "${APPLE_TEAM_ID:?Missing GitHub secret APPLE_TEAM_ID}"
-          : "${WIN_CSC_LINK:?Missing GitHub secret WIN_CSC_LINK}"
-          : "${WIN_CSC_KEY_PASSWORD:?Missing GitHub secret WIN_CSC_KEY_PASSWORD}"
+          test "$(gh api "repos/$GH_REPO" --jq '.private')" = 'false' || { echo "Release repository must be public"; exit 1; }
           BASE_VERSION=$(node -p "require('./package.json').version")
           if [ "$(gh release view "v$BASE_VERSION" --json isDraft --jq '.isDraft' 2>/dev/null || true)" = 'true' ]; then
             echo "Draft v$BASE_VERSION already exists; use Re-run failed jobs for the interrupted release"
@@ -73,11 +59,9 @@ jobs:
         include:
           - name: Windows x64
             runner: windows-latest
-            platform: windows
             target: --win nsis --x64
           - name: macOS Intel and Apple Silicon
             runner: macos-15-intel
-            platform: mac
             target: --mac dmg zip --x64 --arm64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -91,14 +75,10 @@ jobs:
       - run: npm version ${{ needs.prepare.outputs.version }} --no-git-tag-version
       - run: npm ci
       - run: npm run build
-      - name: Build installers and update metadata
+      - name: Build unsigned installers and update metadata
         env:
           GH_TOKEN: ${{ github.token }}
-          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_LINK || secrets.WIN_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.MAC_CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.platform == 'mac' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ matrix.platform == 'mac' && secrets.APPLE_TEAM_ID || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder ${{ matrix.target }} --publish always
       - uses: actions/upload-artifact@v4
         with:

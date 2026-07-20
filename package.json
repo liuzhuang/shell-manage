@@ -79,8 +79,9 @@
       ],
       "category": "public.app-category.developer-tools",
       "icon": "resources/icons/icon.icns",
-      "hardenedRuntime": true,
-      "notarize": true
+      "identity": null,
+      "hardenedRuntime": false,
+      "notarize": false
     },
     "win": {
       "target": [

@@ -66,17 +66,7 @@ npm run verify:installer:mac
 - macOS Apple Silicon：`arm64.dmg` 与更新用 ZIP
 - `latest.yml`、`latest-mac.yml` 和 blockmap 更新元数据
 
-仓库需要配置以下 GitHub Actions Secrets：
-
-```text
-MAC_CSC_LINK
-MAC_CSC_KEY_PASSWORD
-APPLE_ID
-APPLE_APP_SPECIFIC_PASSWORD
-APPLE_TEAM_ID
-WIN_CSC_LINK
-WIN_CSC_KEY_PASSWORD
-```
+当前 workflow 生成未签名预览版，不需要配置 Apple Developer 或 Windows 代码签名 Secrets。macOS 客户端不启用自动更新，需要从 GitHub Releases 手动下载安装；Windows 客户端继续读取 `latest.yml`，但安装程序可能显示「未知发布者」或 SmartScreen 提示。
 
 触发命令：
 
@@ -84,7 +74,7 @@ WIN_CSC_KEY_PASSWORD
 gh workflow run release.yml --repo liuzhuang/shell-manage --ref main
 ```
 
-构建成功后，workflow 提交版本更新并公开 Draft Release。客户端随后从该公开版本读取自动更新元数据。
+构建成功后，workflow 提交版本更新并公开 Draft Release。Windows 客户端随后从该公开版本读取自动更新元数据。
 
 ## 发布前检查
 
@@ -97,6 +87,5 @@ git diff --check
 
 还需要确认：
 
-- GitHub Actions Secrets 已配置且证书仍然有效。
 - Release 同时包含安装包、ZIP、blockmap 和 `latest*.yml`。
 - 官网下载入口指向 `https://github.com/liuzhuang/shell-manage/releases`。
