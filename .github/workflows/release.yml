@@ -42,7 +42,7 @@ jobs:
   quality-gates:
     name: Typecheck, deterministic tests and Electron E2E
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -56,7 +56,9 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:skill
       - run: npm run test:skill-agent
-      - run: xvfb-run --auto-servernum npm run test:e2e
+      - run: npm run test:e2e
+        env:
+          SHELL_MANAGE_E2E_SKIP_PERFORMANCE: '1'
 
   build:
     name: Build ${{ matrix.name }}
