@@ -10,6 +10,7 @@ const RISKY_ENVIRONMENT = /^(?:PATH|ENV|BASH_ENV|IFS|SHELLOPTS|LD_PRELOAD|LD_LIB
 const BLOCKED_COMMAND = /^(?:halt|mkfs(?:\..+)?|poweroff|reboot|rm|rmdir|sfdisk|shutdown|shred|unlink|wipefs)$/u
 const WRITING_COMMAND = /^(?:chgrp|chmod|chown|cp|install|ln|mkdir|mv|rsync|scp|sponge|tee|touch|truncate)$/u
 const SHELL_COMMAND = /^(?:ash|bash|csh|dash|fish|ksh|mksh|sh|tcsh|yash|zsh)$/u
+const DYNAMIC_EXECUTION_COMMAND = /^(?:awk|bun|deno|gawk|groovy|java|jshell|kotlin|lua|luajit|mawk|nawk|node|nodejs|osascript|perl|php|powershell|pwsh|python(?:\d+(?:\.\d+)*)?|r|rscript|ruby|swift|tclsh(?:\d+(?:\.\d+)*)?|wish)$/u
 const SHELL_PREFIX_KEYWORD = new Set(['!', '{', 'do', 'elif', 'else', 'if', 'then', 'until', 'while'])
 const SHELL_COMPLEX_KEYWORD = new Set(['case', 'coproc', 'for', 'function', 'select'])
 const AUTO_EXECUTE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
@@ -164,7 +165,7 @@ export function assessCommandForAutoExecution(command: string, declaredRisk?: un
   return {
     canAutoExecute: true,
     riskLevel,
-    message: 'Agent 已判定为低风险，且未命中本地安全底线。'
+    message: '已通过 Agent 风险判断与本地 denylist，可作为自动执行候选命令。'
   }
 }
 
@@ -257,7 +258,8 @@ function classifyCommand(input: ParsedWord[], depth = 0): DashboardRiskLevel {
   }
   while (words.length > 0 && SHELL_PREFIX_KEYWORD.has(words[0].value)) words.shift()
   if (words.length === 0) return prefixRisk
-  return maxRisk(prefixRisk, classifyExecutable(words, depth))
+  const pathRisk: DashboardRiskLevel = /[/\\]/u.test(words[0].value) ? 'review' : 'safe'
+  return maxRisk(prefixRisk, maxRisk(pathRisk, classifyExecutable(words, depth)))
 }
 
 function classifyExecutable(words: ParsedWord[], depth: number): DashboardRiskLevel {
@@ -272,6 +274,7 @@ function classifyExecutable(words: ParsedWord[], depth: number): DashboardRiskLe
   if (/^(?:kill|killall|pkill)$/u.test(name)) return classifySignalCommand(name, args)
   if (BLOCKED_COMMAND.test(name)) return 'blocked'
   if (WRITING_COMMAND.test(name)) return 'review'
+  if (DYNAMIC_EXECUTION_COMMAND.test(name)) return 'review'
 
   if (name === 'sudo' || name === 'doas') return classifyPrivilegeWrapper(words, depth)
   if (name === 'env') return classifyEnvWrapper(words, depth)

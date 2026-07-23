@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { desktopViewportSize, setElectronViewportSize } from './helpers/electron-viewport'
 
 const appEntry = join(process.cwd(), 'dist/main/index.js')
 const outputDir = join(process.cwd(), 'docs', 'website', 'assets')
@@ -36,7 +37,7 @@ test.beforeAll(async () => {
   await writeFile(join(configDir, 'config.yaml'), captureConfig, 'utf8')
 
   electronApp = await electron.launch({
-    args: [appEntry],
+    args: [appEntry, '-ApplePersistenceIgnoreState', 'YES'],
     env: {
       HOME: captureHome,
       SHELL_MANAGE_HOME: captureHome,
@@ -52,17 +53,7 @@ test.beforeAll(async () => {
 
   page = await electronApp.firstWindow()
   await page.waitForLoadState('domcontentloaded')
-  await electronApp.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0]
-    if (!win) throw new Error('ShellManage window not found')
-    if (win.isFullScreen()) win.setFullScreen(false)
-    if (win.isMaximized()) win.unmaximize()
-    win.setBounds({ x: 0, y: 0, width: 1440, height: 900 }, false)
-  })
-  await expect.poll(async () => electronApp.evaluate(({ BrowserWindow }) => {
-    const bounds = BrowserWindow.getAllWindows()[0]?.getBounds()
-    return bounds ? { width: bounds.width, height: bounds.height } : null
-  })).toEqual({ width: 1440, height: 900 })
+  await setElectronViewportSize(page, desktopViewportSize)
 
   await page.evaluate(() => {
     window.localStorage.setItem('home.aiPromptGuideAfterFirstRun.seen', '1')

@@ -1,35 +1,57 @@
 import type { AppConfig } from '../shared/types'
 
-const LANGSMITH_ENV_KEYS = [
-  'LANGCHAIN_TRACING_V2',
-  'LANGCHAIN_ENDPOINT',
-  'LANGCHAIN_API_KEY',
-  'LANGCHAIN_PROJECT'
-] as const
+export type LangSmithEnvironment = Partial<Pick<
+  NodeJS.ProcessEnv,
+  'LANGSMITH_TRACING' | 'LANGSMITH_API_KEY' | 'LANGSMITH_ENDPOINT' | 'LANGSMITH_PROJECT'
+>>
 
-const initialValues = Object.fromEntries(
-  LANGSMITH_ENV_KEYS.map((key) => [key, process.env[key]])
-) as Record<(typeof LANGSMITH_ENV_KEYS)[number], string | undefined>
+let capturedLangSmithEnvironment: LangSmithEnvironment | undefined
 
-export function applyLangSmithEnvironment(settings: AppConfig['settings']['langsmith']): void {
-  if (!settings?.tracingV2) {
-    LANGSMITH_ENV_KEYS.forEach(restoreInitialValue)
-    return
+export function captureLangSmithEnvironment(
+  environment: LangSmithEnvironment = process.env
+): void {
+  const apiKey = environment.LANGSMITH_API_KEY?.trim()
+  if (!capturedLangSmithEnvironment?.LANGSMITH_API_KEY && apiKey) {
+    capturedLangSmithEnvironment = {
+      LANGSMITH_TRACING: environment.LANGSMITH_TRACING?.trim(),
+      LANGSMITH_API_KEY: apiKey,
+      LANGSMITH_ENDPOINT: environment.LANGSMITH_ENDPOINT?.trim(),
+      LANGSMITH_PROJECT: environment.LANGSMITH_PROJECT?.trim()
+    }
   }
-  process.env.LANGCHAIN_TRACING_V2 = 'true'
-  setConfiguredOrRestore('LANGCHAIN_ENDPOINT', settings.endpoint)
-  setConfiguredOrRestore('LANGCHAIN_API_KEY', settings.apiKey)
-  setConfiguredOrRestore('LANGCHAIN_PROJECT', settings.project)
+  capturedLangSmithEnvironment ??= {}
+  delete environment.LANGSMITH_TRACING
+  delete environment.LANGSMITH_API_KEY
+  delete environment.LANGSMITH_ENDPOINT
+  delete environment.LANGSMITH_PROJECT
 }
 
-function setConfiguredOrRestore(key: (typeof LANGSMITH_ENV_KEYS)[number], value: string | undefined): void {
-  const normalized = value?.trim()
-  if (normalized) process.env[key] = normalized
-  else restoreInitialValue(key)
+export function resolveLangSmithSettings(
+  settings: AppConfig['settings']['langsmith'],
+  environment: LangSmithEnvironment = capturedLangSmithEnvironment ?? process.env
+): NonNullable<AppConfig['settings']['langsmith']> {
+  const environmentApiKey = environment.LANGSMITH_API_KEY?.trim()
+  if (environmentApiKey) {
+    const environmentTracing = environment.LANGSMITH_TRACING?.trim().toLowerCase()
+    return {
+      ...(environmentTracing ? { tracing: environmentTracing !== 'false' } : {}),
+      apiKey: environmentApiKey,
+      endpoint: environment.LANGSMITH_ENDPOINT?.trim() || undefined,
+      project: environment.LANGSMITH_PROJECT?.trim() || undefined
+    }
+  }
+  return {
+    ...(settings?.tracing !== undefined ? { tracing: settings.tracing } : {}),
+    apiKey: settings?.apiKey?.trim(),
+    endpoint: settings?.endpoint?.trim(),
+    project: settings?.project?.trim()
+  }
 }
 
-function restoreInitialValue(key: (typeof LANGSMITH_ENV_KEYS)[number]): void {
-  const initial = initialValues[key]
-  if (initial === undefined) delete process.env[key]
-  else process.env[key] = initial
+export function isLangSmithTracingConfigured(
+  settings: AppConfig['settings']['langsmith']
+): boolean {
+  if (settings?.tracing === false) return false
+  const apiKey = settings?.apiKey?.trim()
+  return Boolean(apiKey && !apiKey.toLowerCase().includes('xxxxx'))
 }

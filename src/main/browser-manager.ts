@@ -209,7 +209,7 @@ export class BrowserManager {
     this.emitPageInfo()
   }
 
-  navigate(tabId: string, url: string): BrowserActionResult {
+  async navigate(tabId: string, url: string): Promise<BrowserActionResult> {
     const entry = this.tabs.get(tabId)
     if (!entry) return { ok: false, error: '标签页不存在', activeTabId: this.activeTabId }
     this.setActiveTab(tabId)
@@ -227,13 +227,21 @@ export class BrowserManager {
       return { ok: false, error: message, activeTabId: this.activeTabId }
     }
     const displayUrl = resolved.kind === 'internal' ? resolved.displayUrl : resolved.url
-    entry.view.webContents.stop()
     this.patchMeta(tabId, {
       url: displayUrl,
       title: titleFromBrowserUrl(displayUrl),
       loading: true
     })
-    void this.loadResolved(entry.view, resolved).catch(() => undefined)
+    if (resolved.kind === 'internal') {
+      try {
+        await this.loadResolved(entry.view, resolved)
+      } catch {
+        this.patchMeta(tabId, { loading: false })
+        return { ok: false, error: '无法打开内部页面', activeTabId: this.activeTabId }
+      }
+    } else {
+      void this.loadResolved(entry.view, resolved).catch(() => undefined)
+    }
     return { ok: true, activeTabId: this.activeTabId }
   }
 

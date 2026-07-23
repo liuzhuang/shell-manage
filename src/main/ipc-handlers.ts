@@ -30,7 +30,9 @@ import type {
   DeployScriptExecuteResult,
   DeployScriptValidateRequest,
   DeployScriptValidateResult,
-  QueryAiStreamPayload,
+  QueryAiProgressPayload,
+  QueryAgentToolTraceRequest,
+  QueryAgentTraceFinishRequest,
   QueryOutputPayload,
   SshKeyImportRequest,
   TerminalDataPayload,
@@ -81,6 +83,21 @@ import yaml from 'js-yaml'
 import { AnalyticsStore } from './analytics-store'
 import { BrowserManager } from './browser-manager'
 import type { BrowserContentBounds, BrowserCreateTabRequest, BrowserTheme } from '../shared/browser-types'
+import { withRunTree } from 'langsmith/traceable'
+import { QueryAgentTraceStore } from './query-agent-trace'
+import { buildChildProcessEnvironment } from './child-process-env'
+import { flushLangSmithTracing } from './langsmith-tracing'
+import { isLangSmithTracingConfigured, resolveLangSmithSettings } from './langsmith-env'
+import { runQueryAgent } from './query-agent-runner'
+import type {
+  QueryAgentEffect,
+  QueryAgentEffectResultMessage,
+  QueryAgentExecutionResult,
+  QueryAgentReviewRequest,
+  QueryAgentStep
+} from '../shared/query-agent'
+import { isValidQueryAgentId, normalizeQueryAiRequest } from './query-ai-request'
+import { QueryAgentRunGuard } from './query-agent-run-guard'
 
 export interface IpcRuntimeControl {
   shutdown: () => Promise<void>
@@ -105,6 +122,8 @@ export function registerIpcHandlers(
   setConfig: (config: AppConfig) => void
 ): IpcRuntimeControl {
   const analyticsStore = new AnalyticsStore()
+  const queryAgentTraceStore = new QueryAgentTraceStore()
+  const queryAgentRunGuard = new QueryAgentRunGuard()
   interface TerminalRuntimeState {
     restarts: number
     manualStop: boolean
@@ -124,9 +143,15 @@ export function registerIpcHandlers(
     autoExecutionPromptTail: string
     autoExecutionPromptReady: boolean
     autoExecutionCompletionMarker?: string
+    autoExecutionFailureMarker?: string
     autoExecutionCompletionSeen: boolean
+    autoExecutionCompletionOutcome?: 'succeeded' | 'failed'
+    autoExecutionInterrupted: boolean
+    autoExecutionHiddenEcho?: string
+    autoExecutionHiddenEchoTail: string
     autoExecutionSupported: boolean
     autoExecutionMode?: 'local' | 'ssh'
+    reviewControlled: boolean
   }
   interface QueryAutoExecutionGrant {
     command: string
@@ -148,6 +173,13 @@ export function registerIpcHandlers(
   const terminalAutomationBusyMap = new Map<string, IPty>()
   const terminalManuallyControlledSet = new Set<string>()
   const queryAutoExecutionGrantMap = new Map<string, QueryAutoExecutionGrant>()
+  const queryAiAbortControllerMap = new Map<string, AbortController>()
+  const activeQueryAiCompletions = new Set<Promise<void>>()
+  const queryAgentEffectPending = new Map<string, {
+    senderId: number
+    resolve: (result: unknown) => void
+    reject: (error: Error) => void
+  }>()
   const monitoringTraceBySessionKey = new Map<string, string>()
   const MAX_TERMINAL_BUFFER = 200_000
   const TERMINAL_BUFFER_RETAIN_MS = 30 * 60 * 1000
@@ -196,6 +228,7 @@ export function registerIpcHandlers(
     ) {
       return undefined
     }
+    if (request.agentRunId && (request.stepIndex || 0) > 3) return undefined
     const terminal = terminalMap.get(resolveTerminalSessionKey(commandName, sessionId))
     if (
       !terminal ||
@@ -370,8 +403,10 @@ export function registerIpcHandlers(
     sessionKey: string,
     expectedPty: IPty,
     completionMarker: string,
-    timeoutMs = 15_000
-  ): Promise<void> => {
+    timeoutMs = 15_000,
+    requirePromptReady = true,
+    allowManualControl = false
+  ): Promise<'succeeded' | 'failed'> => {
     const startedAt = Date.now()
     while (Date.now() - startedAt < timeoutMs) {
       const session = terminalMap.get(sessionKey)
@@ -380,9 +415,12 @@ export function registerIpcHandlers(
       if (session.autoExecutionCompletionMarker !== completionMarker) {
         throw new Error('自动执行完成凭证已失效。')
       }
-      if (session.autoExecutionCompletionSeen && session.autoExecutionPromptReady) {
-        if (terminalManuallyControlledSet.has(sessionKey)) throw new Error('自动执行已被手动中断。')
-        return
+      if (session.autoExecutionInterrupted) return 'failed'
+      if (session.autoExecutionCompletionSeen && (!requirePromptReady || session.autoExecutionPromptReady)) {
+        if (!allowManualControl && terminalManuallyControlledSet.has(sessionKey)) {
+          throw new Error('自动执行已被手动中断。')
+        }
+        return session.autoExecutionCompletionOutcome || 'failed'
       }
       await sleep(50)
     }
@@ -391,6 +429,7 @@ export function registerIpcHandlers(
 
   const isTerminalAutoExecutionReady = (sessionKey: string, session?: TerminalSessionEntry): boolean => {
     if (!session?.autoExecutionPromptMarker || !session.autoExecutionPromptReady) return false
+    if (session.reviewControlled) return false
     if (!terminalOutputSinceInputMap.get(sessionKey)) return false
     if (terminalRuntimeMap.get(sessionKey)?.manualStop) return false
     if (terminalAutomationBusyMap.get(sessionKey) === session.pty) return false
@@ -400,25 +439,37 @@ export function registerIpcHandlers(
 
   const consumeAutoExecutionPromptMarker = (sessionKey: string, session: TerminalSessionEntry, data: string): string => {
     const marker = session.autoExecutionPromptMarker
-    if (!marker) return data
+    if (!marker && !session.autoExecutionCompletionMarker && !session.autoExecutionFailureMarker) return data
 
-    let output = `${session.autoExecutionPromptTail}${data}`
+    let output = `${session.autoExecutionPromptTail}${consumeAutoExecutionEcho(session, data)}`
     let visibleOutput = ''
     while (output) {
-      const completionMarker = session.autoExecutionCompletionMarker
-      const promptIndex = output.indexOf(marker)
-      const completionIndex = completionMarker ? output.indexOf(completionMarker) : -1
-      const nextIsCompletion = completionIndex >= 0 && (promptIndex < 0 || completionIndex < promptIndex)
-      const markerIndex = nextIsCompletion ? completionIndex : promptIndex
+      const completionMarkers = [
+        session.autoExecutionCompletionMarker
+          ? { value: session.autoExecutionCompletionMarker, outcome: 'succeeded' as const }
+          : undefined,
+        session.autoExecutionFailureMarker
+          ? { value: session.autoExecutionFailureMarker, outcome: 'failed' as const }
+          : undefined
+      ].filter((item): item is { value: string; outcome: 'succeeded' | 'failed' } => Boolean(item))
+      const promptIndex = marker ? output.indexOf(marker) : -1
+      const nextCompletion = completionMarkers
+        .map((item) => ({ ...item, index: output.indexOf(item.value) }))
+        .filter((item) => item.index >= 0)
+        .sort((left, right) => left.index - right.index)[0]
+      const nextIsCompletion = Boolean(nextCompletion && (promptIndex < 0 || nextCompletion.index < promptIndex))
+      const markerIndex = nextIsCompletion ? nextCompletion!.index : promptIndex
       if (markerIndex < 0) break
 
       visibleOutput += output.slice(0, markerIndex)
-      if (nextIsCompletion && completionMarker) {
-        output = output.slice(markerIndex + completionMarker.length)
+      if (nextIsCompletion && nextCompletion) {
+        output = output.slice(markerIndex + nextCompletion.value.length)
         session.autoExecutionCompletionSeen = true
+        session.autoExecutionCompletionOutcome = nextCompletion.outcome
         continue
       }
 
+      if (!marker) break
       output = output.slice(markerIndex + marker.length)
       const completionSatisfied = !session.autoExecutionCompletionMarker || session.autoExecutionCompletionSeen
       const interruptedWhileBusy =
@@ -434,7 +485,8 @@ export function registerIpcHandlers(
       }
     }
 
-    const candidates = [marker, session.autoExecutionCompletionMarker].filter((item): item is string => Boolean(item))
+    const candidates = [marker, session.autoExecutionCompletionMarker, session.autoExecutionFailureMarker]
+      .filter((item): item is string => Boolean(item))
     let pendingLength = 0
     for (let length = output.length; length > 0; length -= 1) {
       const suffix = output.slice(-length)
@@ -445,6 +497,58 @@ export function registerIpcHandlers(
     session.autoExecutionPromptTail = pendingLength > 0 ? output.slice(-pendingLength) : ''
     visibleOutput += pendingLength > 0 ? output.slice(0, -pendingLength) : output
     return visibleOutput
+  }
+
+  const consumeAutoExecutionEcho = (session: TerminalSessionEntry, data: string): string => {
+    let expected = session.autoExecutionHiddenEcho
+    if (!expected) return data
+
+    let output = `${session.autoExecutionHiddenEchoTail}${data}`
+    let visibleOutput = ''
+    while (expected) {
+      const [expectedLine, ...remainingLines] = expected.split('\n')
+      const normalizedOutput = output.replace(/\r/gu, '')
+      const normalizedIndex = normalizedOutput.indexOf(expectedLine.replace(/\r/gu, ''))
+      let expectedIndex = -1
+      if (normalizedIndex >= 0) {
+        let normalizedOffset = 0
+        for (let rawIndex = 0; rawIndex < output.length; rawIndex += 1) {
+          if (output[rawIndex] === '\r') continue
+          if (normalizedOffset === normalizedIndex) {
+            expectedIndex = rawIndex
+            break
+          }
+          normalizedOffset += 1
+        }
+      }
+      if (expectedIndex < 0) {
+        const controlMarkerArrived = [
+          session.autoExecutionCompletionMarker,
+          session.autoExecutionFailureMarker
+        ].some((marker) => marker && output.includes(marker))
+        if (controlMarkerArrived) {
+          session.autoExecutionHiddenEcho = undefined
+          session.autoExecutionHiddenEchoTail = ''
+          return `${visibleOutput}${output}`
+        }
+        const retainedLength = Math.min(output.length, expectedLine.length + 256)
+        session.autoExecutionHiddenEchoTail = output.slice(-retainedLength)
+        return `${visibleOutput}${output.slice(0, output.length - retainedLength)}`
+      }
+
+      const lineEnd = output.indexOf('\n', expectedIndex)
+      if (lineEnd < 0) {
+        visibleOutput += output.slice(0, expectedIndex)
+        session.autoExecutionHiddenEchoTail = output.slice(expectedIndex)
+        return visibleOutput
+      }
+      visibleOutput += output.slice(0, expectedIndex)
+      output = output.slice(lineEnd + 1)
+      expected = remainingLines.join('\n')
+      session.autoExecutionHiddenEcho = expected || undefined
+      session.autoExecutionHiddenEchoTail = ''
+    }
+    return `${visibleOutput}${output}`
   }
 
   const waitForTerminalOutputPattern = async (
@@ -995,7 +1099,7 @@ export function registerIpcHandlers(
         cols: 120,
         rows: 32,
         cwd: process.cwd(),
-        env: process.env
+        env: buildChildProcessEnvironment()
       })
     } catch (error) {
       cleanupManagedAutoExecutionShell(managedAutoExecutionShell)
@@ -1020,8 +1124,11 @@ export function registerIpcHandlers(
       autoExecutionPromptTail: '',
       autoExecutionPromptReady: false,
       autoExecutionCompletionSeen: false,
+      autoExecutionInterrupted: false,
+      autoExecutionHiddenEchoTail: '',
       autoExecutionSupported,
-      autoExecutionMode: managedAutoExecutionShell?.mode
+      autoExecutionMode: managedAutoExecutionShell?.mode,
+      reviewControlled: false
     })
     terminalPendingInputMap.set(sessionKey, false)
     terminalOutputSinceInputMap.set(sessionKey, false)
@@ -1203,6 +1310,7 @@ export function registerIpcHandlers(
         sessionId?: string
         expectedInstanceId?: string
         autoExecutionToken?: string
+        awaitCompletion?: boolean
       }
     ) => {
       const source = options?.source || 'unknown'
@@ -1211,6 +1319,120 @@ export function registerIpcHandlers(
       const sessionKey = resolveTerminalSessionKey(commandName, sessionId)
       const terminal = terminalMap.get(sessionKey)
       if (!terminal) return { ok: false, message: '终端会话已结束，命令未执行。' }
+      if (data === '\x03' && options?.expectedInstanceId && options.expectedInstanceId !== terminal.instanceId) {
+        return { ok: false, message: '等待确认期间终端会话已变化，命令未中断。' }
+      }
+      const executeCommandWithCompletion = async (
+        command: string,
+        requirePromptReady = true,
+        allowManualControl = false
+      ) => {
+        const lineEnding = data.endsWith('\r') ? '\r' : '\n'
+        const completionId = randomBytes(16).toString('hex')
+        const completionMarker = `\x1b]777;shell-manage-complete=${completionId}:ok\x07`
+        const failureMarker = `\x1b]777;shell-manage-complete=${completionId}:failed\x07`
+        const statusVariable = `__shell_manage_status_${completionId}`
+        const completionCommand = `eval ${quotePosixShellArgument(command)}; ${statusVariable}=$?; if [ "$${statusVariable}" -eq 0 ]; then command printf '\\033]777;shell-manage-complete=${completionId}:ok\\007'; else command printf '\\033]777;shell-manage-complete=${completionId}:failed\\007'; fi; unset ${statusVariable}`
+        terminal.autoExecutionCompletionMarker = completionMarker
+        terminal.autoExecutionFailureMarker = failureMarker
+        terminal.autoExecutionCompletionSeen = false
+        terminal.autoExecutionCompletionOutcome = undefined
+        terminal.autoExecutionInterrupted = false
+        terminal.autoExecutionHiddenEcho = completionCommand.slice(0, 12)
+        terminal.autoExecutionHiddenEchoTail = ''
+        terminalAutomationBusyMap.set(sessionKey, terminal.pty)
+        try {
+          if (!writeTerminalInput(sessionKey, `${completionCommand}${lineEnding}`, terminal.pty)) {
+            return { ok: false, message: '终端会话已结束，命令未执行。' }
+          }
+          const completionOutcome = await waitForAutoExecutionCompletion(
+            sessionKey,
+            terminal.pty,
+            completionMarker,
+            15_000,
+            requirePromptReady,
+            allowManualControl
+          )
+          if (completionOutcome === 'failed') {
+            return {
+              ok: false,
+              completed: true,
+              executionFailed: true,
+              message: '命令执行失败（非零退出码）。'
+            }
+          }
+          return { ok: true, completed: true }
+        } catch (error) {
+          const activeTerminal = terminalMap.get(sessionKey)
+          if (
+            activeTerminal?.pty === terminal.pty &&
+            !terminalRuntimeMap.get(sessionKey)?.manualStop &&
+            (allowManualControl || !terminalManuallyControlledSet.has(sessionKey))
+          ) {
+            activeTerminal.autoExecutionPromptReady = false
+            if (writeTerminalInput(sessionKey, '\x03', terminal.pty)) {
+              try {
+                await waitForAutoExecutionCompletion(
+                  sessionKey,
+                  terminal.pty,
+                  completionMarker,
+                  3_000,
+                  requirePromptReady,
+                  allowManualControl
+                )
+              } catch {
+                terminalManuallyControlledSet.add(sessionKey)
+              }
+            }
+          }
+          return {
+            ok: false,
+            canAutoExecute: false,
+            riskLevel: 'review' as const,
+            message: error instanceof Error ? error.message : String(error)
+          }
+        } finally {
+          const activeTerminal = terminalMap.get(sessionKey)
+          if (activeTerminal?.pty === terminal.pty) {
+            activeTerminal.autoExecutionCompletionMarker = undefined
+            activeTerminal.autoExecutionFailureMarker = undefined
+            activeTerminal.autoExecutionCompletionSeen = false
+            activeTerminal.autoExecutionCompletionOutcome = undefined
+            activeTerminal.autoExecutionInterrupted = false
+          }
+          if (terminalAutomationBusyMap.get(sessionKey) === terminal.pty) {
+            terminalAutomationBusyMap.delete(sessionKey)
+          }
+        }
+      }
+      if (source === 'query' && options?.awaitCompletion) {
+        if (!options.expectedInstanceId || options.expectedInstanceId !== terminal.instanceId) {
+          return { ok: false, message: '等待确认期间终端会话已变化，命令未执行。' }
+        }
+        if (terminalRuntimeMap.get(sessionKey)?.manualStop) {
+          return { ok: false, message: '终端会话正在停止，命令未执行。' }
+        }
+        if (terminalAutomationBusyMap.get(sessionKey) === terminal.pty || terminal.autoExecutionCompletionMarker) {
+          return { ok: false, message: '终端仍有命令正在执行，请等待完成后重试。' }
+        }
+        if (terminalPendingInputMap.get(sessionKey)) {
+          return { ok: false, message: '终端存在尚未提交的手动输入，命令未执行。' }
+        }
+        const reviewedCommand = data.trim()
+        if (!reviewedCommand || /[\r\n]/u.test(reviewedCommand)) {
+          return { ok: false, message: '待确认命令必须是一条单行命令。' }
+        }
+        try {
+          return await executeCommandWithCompletion(
+            reviewedCommand,
+            Boolean(terminal.autoExecutionPromptMarker),
+            true
+          )
+        } finally {
+          if (terminalMap.get(sessionKey)?.pty === terminal.pty) terminal.reviewControlled = true
+          terminalManuallyControlledSet.add(sessionKey)
+        }
+      }
       if (source === 'query-auto') {
         if (!options?.expectedInstanceId || options.expectedInstanceId !== terminal.instanceId) {
           return {
@@ -1233,7 +1455,7 @@ export function registerIpcHandlers(
             ok: false,
             canAutoExecute: false,
             riskLevel: 'review' as const,
-            message: 'Agent 的低风险判定缺失、已失效或与当前会话不匹配，已保留并等待手动执行。'
+            message: 'Agent 的自动执行候选判定缺失、已失效或与当前会话不匹配，已保留并等待手动执行。'
           }
         }
         if (terminalRuntimeMap.get(sessionKey)?.manualStop) {
@@ -1284,51 +1506,7 @@ export function registerIpcHandlers(
             message: '仅支持应用已验证且未被手动接管的交互 Shell，已跳过自动执行。'
           }
         }
-        const lineEnding = data.endsWith('\r') ? '\r' : '\n'
-        const completionId = randomBytes(16).toString('hex')
-        const completionMarker = `\x1b]777;shell-manage-complete=${completionId}\x07`
-        const completionCommand = `if ${hardenedCommand}; then :; else :; fi; command printf '\\033]777;shell-manage-complete=${completionId}\\007'`
-        terminal.autoExecutionCompletionMarker = completionMarker
-        terminal.autoExecutionCompletionSeen = false
-        terminalAutomationBusyMap.set(sessionKey, terminal.pty)
-        try {
-          if (!writeTerminalInput(sessionKey, `${completionCommand}${lineEnding}`, terminal.pty)) {
-            return { ok: false, message: '终端会话已结束，命令未执行。' }
-          }
-          await waitForAutoExecutionCompletion(sessionKey, terminal.pty, completionMarker)
-          return { ok: true, completed: true }
-        } catch (error) {
-          const activeTerminal = terminalMap.get(sessionKey)
-          if (
-            activeTerminal?.pty === terminal.pty &&
-            !terminalRuntimeMap.get(sessionKey)?.manualStop &&
-            !terminalManuallyControlledSet.has(sessionKey)
-          ) {
-            activeTerminal.autoExecutionPromptReady = false
-            if (writeTerminalInput(sessionKey, '\x03', terminal.pty)) {
-              try {
-                await waitForAutoExecutionCompletion(sessionKey, terminal.pty, completionMarker, 3_000)
-              } catch {
-                terminalManuallyControlledSet.add(sessionKey)
-              }
-            }
-          }
-          return {
-            ok: false,
-            canAutoExecute: false,
-            riskLevel: 'review' as const,
-            message: error instanceof Error ? error.message : String(error)
-          }
-        } finally {
-          const activeTerminal = terminalMap.get(sessionKey)
-          if (activeTerminal?.pty === terminal.pty) {
-            activeTerminal.autoExecutionCompletionMarker = undefined
-            activeTerminal.autoExecutionCompletionSeen = false
-          }
-          if (terminalAutomationBusyMap.get(sessionKey) === terminal.pty) {
-            terminalAutomationBusyMap.delete(sessionKey)
-          }
-        }
+        return executeCommandWithCompletion(hardenedCommand)
       }
       if (
         terminal.autoExecutionCompletionMarker &&
@@ -1341,6 +1519,9 @@ export function registerIpcHandlers(
         if (!writeTerminalInput(sessionKey, data, terminal.pty)) {
           return { ok: false, message: '终端会话已结束，命令未执行。' }
         }
+        terminal.autoExecutionCompletionSeen = true
+        terminal.autoExecutionCompletionOutcome = 'failed'
+        terminal.autoExecutionInterrupted = true
         return { ok: true }
       }
       if (source === 'monitoring') {
@@ -1578,7 +1759,10 @@ export function registerIpcHandlers(
     runningQuery?.kill('SIGTERM')
     const shellExec = resolveShellExecutable()
     const shellArgs = resolveServiceArgs(shellExec, command)
-    const child = cpSpawn(shellExec, shellArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = cpSpawn(shellExec, shellArgs, {
+      env: buildChildProcessEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
     runningQuery = child
     child.stdout?.on('data', (buf) => {
       const text = String(buf)
@@ -1595,29 +1779,200 @@ export function registerIpcHandlers(
     })
     return { ok: true }
   })
-  ipcMain.handle('query:cancel', () => {
+  ipcMain.handle('query:cancel', (_e, requestId?: unknown) => {
     runningQuery?.kill('SIGTERM')
     runningQuery = undefined
-    return { ok: true }
+    const normalizedRequestId = typeof requestId === 'string' ? requestId.trim() : ''
+    const controller = normalizedRequestId ? queryAiAbortControllerMap.get(normalizedRequestId) : undefined
+    controller?.abort()
+    return { ok: true, cancelledAiRequest: Boolean(controller) }
+  })
+  ipcMain.on('query:agent-effect-result', (event, payload: QueryAgentEffectResultMessage) => {
+    const bridgeId = typeof payload?.bridgeId === 'string' ? payload.bridgeId : ''
+    const effectId = typeof payload?.effectId === 'string' ? payload.effectId : ''
+    const pending = queryAgentEffectPending.get(`${bridgeId}:${effectId}`)
+    if (!pending || pending.senderId !== event.sender.id) return
+    queryAgentEffectPending.delete(`${bridgeId}:${effectId}`)
+    if (payload.ok) pending.resolve(payload.result)
+    else pending.reject(new Error(payload.error || 'Query Agent effect 执行失败。'))
+  })
+  ipcMain.handle('query:agent-run', async (event, bridgeIdInput: unknown) => {
+    const bridgeId = typeof bridgeIdInput === 'string' ? bridgeIdInput.trim() : ''
+    if (!/^query-agent-[A-Za-z0-9-]{8,80}$/u.test(bridgeId)) throw new Error('Query Agent bridgeId 无效。')
+    const sender = event.sender
+    let effectSequence = 0
+    const callEffect = <T>(effect: QueryAgentEffect): Promise<T> => {
+      const effectId = `${++effectSequence}`
+      return new Promise<T>((resolve, reject) => {
+        queryAgentEffectPending.set(`${bridgeId}:${effectId}`, {
+          senderId: sender.id,
+          resolve: (result) => resolve(result as T),
+          reject
+        })
+        sender.send('query:agent-effect', { ...effect, bridgeId, effectId })
+      })
+    }
+    const rejectPendingEffects = () => {
+      for (const [key, pending] of queryAgentEffectPending) {
+        if (!key.startsWith(`${bridgeId}:`) || pending.senderId !== sender.id) continue
+        queryAgentEffectPending.delete(key)
+        pending.reject(new Error('Query Agent 页面已关闭。'))
+      }
+    }
+    sender.once('destroyed', rejectPendingEffects)
+    try {
+      return await runQueryAgent({
+        requestStep: (payload) => callEffect<QueryAgentStep>({ type: 'requestStep', payload }),
+        executeCommand: (command) => callEffect<QueryAgentExecutionResult>({ type: 'executeCommand', payload: { command } }),
+        reviewCommand: (payload: QueryAgentReviewRequest) => callEffect<QueryAgentExecutionResult>({ type: 'reviewCommand', payload }),
+        onDuplicateCommand: (command) => callEffect<void>({ type: 'duplicateCommand', payload: { command } }),
+        onPhase: (phase) => callEffect<void>({ type: 'phase', payload: { phase } }),
+        shouldContinue: () => callEffect<boolean>({ type: 'shouldContinue', payload: {} })
+      })
+    } finally {
+      sender.removeListener('destroyed', rejectPendingEffects)
+      rejectPendingEffects()
+    }
   })
   ipcMain.handle('query:assess-auto-execution', (_e, command: unknown, autoExecutionToken?: unknown) => {
     const normalizedCommand = typeof command === 'string' ? command : ''
     const grant = readQueryAutoExecutionGrant(autoExecutionToken, normalizedCommand)
     return assessCommandForAutoExecution(normalizedCommand, grant?.riskLevel)
   })
-  ipcMain.handle('query:ai-chat', async (_e, request: QueryAiRequest) => {
-    broadcast('query:ai-stream', asQueryAiStream(request.requestId, 'start'))
+  ipcMain.handle('query:agent-trace-tool', async (_e, payload: QueryAgentToolTraceRequest) => {
+    const agentRunId = typeof payload?.agentRunId === 'string' ? payload.agentRunId.trim() : ''
+    const command = typeof payload?.command === 'string' ? payload.command : ''
+    const output = typeof payload?.output === 'string' ? payload.output : ''
+    const stepIndex = Number.isInteger(payload?.stepIndex) ? payload.stepIndex : 0
+    const durationMs = Number.isFinite(payload?.durationMs) ? Math.max(0, payload.durationMs) : -1
+    const status = payload?.status
+    if (
+      !isValidQueryAgentId(agentRunId) ||
+      !command.trim() || command.length > 12_000 || output.length > 200_000 ||
+      stepIndex < 1 || stepIndex > 3 || durationMs < 0 ||
+      !['completed', 'waiting_for_review', 'failed', 'cancelled'].includes(status)
+    ) {
+      return { ok: false, recorded: false }
+    }
     try {
-      const result = await llmService.chatToShell(request, getConfig(), async (token) => {
-        broadcast('query:ai-stream', asQueryAiStream(request.requestId, 'chunk', token))
+      const recorded = await queryAgentTraceStore.recordToolRun({
+        agentRunId,
+        stepIndex,
+        command,
+        output,
+        status,
+        durationMs
       })
-      broadcast('query:ai-stream', asQueryAiStream(request.requestId, 'end', result.answer, undefined, result.stats))
-      const autoExecutionToken = issueQueryAutoExecutionGrant(request, result.action)
+      return { ok: true, recorded }
+    } catch (error) {
+      console.warn('[query-agent][trace] tool trace unavailable', {
+        agentRunId,
+        errorName: error instanceof Error ? error.name : 'UnknownError'
+      })
+      return { ok: false, recorded: false }
+    }
+  })
+  ipcMain.handle('query:agent-trace-finish', async (_e, payload: QueryAgentTraceFinishRequest) => {
+    const agentRunId = typeof payload?.agentRunId === 'string' ? payload.agentRunId.trim() : ''
+    const phase = payload?.phase
+    const executedCommandCount = Number.isInteger(payload?.executedCommandCount)
+      ? payload.executedCommandCount
+      : -1
+    const stepCount = Number.isInteger(payload?.stepCount) ? payload.stepCount : -1
+    const durationMs = Number.isFinite(payload?.durationMs) ? Math.max(0, payload.durationMs) : -1
+    if (
+      !isValidQueryAgentId(agentRunId) ||
+      executedCommandCount < 0 || executedCommandCount > 3 ||
+      stepCount < executedCommandCount || stepCount > 4 || durationMs < 0 ||
+      !['completed', 'waiting_for_review', 'cancelled', 'failed'].includes(phase)
+    ) {
+      return { ok: false, recorded: false }
+    }
+    try {
+      queryAgentRunGuard.finish(agentRunId)
+      const recorded = await queryAgentTraceStore.finish({
+        agentRunId,
+        phase,
+        executedCommandCount,
+        stepCount,
+        durationMs,
+        stats: payload.stats,
+        finalAnswer: typeof payload.finalAnswer === 'string' ? payload.finalAnswer : undefined,
+        error: typeof payload.error === 'string' ? payload.error : undefined
+      })
+      return { ok: true, recorded }
+    } catch (error) {
+      console.warn('[query-agent][trace] finish unavailable', {
+        agentRunId,
+        errorName: error instanceof Error ? error.name : 'UnknownError'
+      })
+      return { ok: false, recorded: false }
+    }
+  })
+  ipcMain.handle('query:ai-chat', async (_e, request: QueryAiRequest) => {
+    const normalized = normalizeQueryAiRequest(request)
+    const normalizedRequest = normalized.request
+    const requestId = normalizedRequest.requestId
+    const explicitAgentRunId = normalized.explicitAgentRunId
+    const agentRunId = explicitAgentRunId || requestId
+    if (explicitAgentRunId && !queryAgentRunGuard.reserveStep(agentRunId, normalizedRequest.stepIndex || 0)) {
+      throw new Error('Query Agent 步骤必须从 1 开始并严格递增，且最多请求 4 次模型调用。')
+    }
+    const previousController = queryAiAbortControllerMap.get(requestId)
+    previousController?.abort()
+    const controller = new AbortController()
+    queryAiAbortControllerMap.set(requestId, controller)
+    let resolveCompletion: () => void = () => {}
+    const completion = new Promise<void>((resolve) => {
+      resolveCompletion = resolve
+    })
+    activeQueryAiCompletions.add(completion)
+    try {
+      const config = getConfig()
+      const langsmith = resolveLangSmithSettings(config.settings.langsmith)
+      const langsmithApiKey = isLangSmithTracingConfigured(langsmith) ? langsmith.apiKey : undefined
+      let traceRoot: Awaited<ReturnType<QueryAgentTraceStore['start']>>
+      if (explicitAgentRunId) {
+        try {
+          traceRoot = await queryAgentTraceStore.start({
+            agentRunId,
+            langsmithApiKey,
+            langsmithEndpoint: langsmith.endpoint,
+            langsmithProject: langsmith.project,
+            input: normalizedRequest.input,
+            selectedCommand: normalizedRequest.selectedCommand,
+            provider: config.settings.llm.provider,
+            model: config.settings.llm.model
+          })
+        } catch (error) {
+          console.warn('[query-agent][trace] root trace unavailable', {
+            agentRunId,
+            errorName: error instanceof Error ? error.name : 'UnknownError'
+          })
+        }
+      }
+      const invokeAgent = () => llmService.chatToShell(normalizedRequest, config, async (phase) => {
+        broadcast('query:ai-progress', asQueryAiProgress(requestId, phase))
+      }, controller.signal)
+      const result = traceRoot
+        ? await withRunTree(traceRoot, invokeAgent)
+        : await invokeAgent()
+      controller.signal.throwIfAborted()
+      const autoExecutionToken = issueQueryAutoExecutionGrant(normalizedRequest, result.action)
       return autoExecutionToken ? { ...result, autoExecutionToken } : result
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      broadcast('query:ai-stream', asQueryAiStream(request.requestId, 'error', undefined, message))
+      const phase = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')
+        ? 'cancelled'
+        : 'failed'
+      broadcast('query:ai-progress', asQueryAiProgress(requestId, phase, message))
       throw error
+    } finally {
+      if (queryAiAbortControllerMap.get(requestId) === controller) {
+        queryAiAbortControllerMap.delete(requestId)
+      }
+      resolveCompletion()
+      activeQueryAiCompletions.delete(completion)
     }
   })
 
@@ -1747,10 +2102,23 @@ export function registerIpcHandlers(
   }
 
   const shutdown = async () => {
-    await browserManager.destroyAll()
-    await analyticsStore.shutdown()
     runningQuery?.kill('SIGTERM')
     runningQuery = undefined
+    queryAiAbortControllerMap.forEach((controller) => controller.abort())
+    const activeQueryAi = [...activeQueryAiCompletions]
+    if (activeQueryAi.length > 0) {
+      await Promise.race([
+        Promise.allSettled(activeQueryAi),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000))
+      ])
+    }
+    await browserManager.destroyAll()
+    await queryAgentTraceStore.finishAll('应用退出')
+    await queryAgentTraceStore.flushPending()
+    await flushLangSmithTracing()
+    await analyticsStore.shutdown()
+    queryAiAbortControllerMap.clear()
+    queryAgentRunGuard.clear()
     const terminalEntries = [...terminalMap.entries()]
     if (terminalEntries.length === 0) return
     await Promise.allSettled(
@@ -1861,7 +2229,12 @@ function readWindowsProcessLines(): string[] {
 
 function runLocalCommand(command: string, args: string[]): string {
   try {
-    return execFileSync(command, args, { encoding: 'utf8', timeout: 2000, maxBuffer: 1024 * 1024 })
+    return execFileSync(command, args, {
+      encoding: 'utf8',
+      env: buildChildProcessEnvironment(),
+      timeout: 2000,
+      maxBuffer: 1024 * 1024
+    })
   } catch {
     return ''
   }
@@ -1869,7 +2242,12 @@ function runLocalCommand(command: string, args: string[]): string {
 
 function runLocalShellCommand(command: string): string {
   try {
-    return execFileSync('sh', ['-lc', command], { encoding: 'utf8', timeout: 2000, maxBuffer: 1024 * 256 })
+    return execFileSync('sh', ['-lc', command], {
+      encoding: 'utf8',
+      env: buildChildProcessEnvironment(),
+      timeout: 2000,
+      maxBuffer: 1024 * 256
+    })
   } catch {
     return ''
   }
@@ -2077,14 +2455,13 @@ function resolveTerminalSessionKind(sessionId: string | undefined, optSource: st
   return 'default'
 }
 
-function asQueryAiStream(
+function asQueryAiProgress(
   requestId: string,
-  phase: QueryAiStreamPayload['phase'],
-  text?: string,
+  phase: QueryAiProgressPayload['phase'],
   error?: string,
-  stats?: QueryAiStreamPayload['stats']
-): QueryAiStreamPayload {
-  return { requestId, phase, text, error, stats }
+  stats?: QueryAiProgressPayload['stats']
+): QueryAiProgressPayload {
+  return { requestId, phase, error, stats }
 }
 
 function normalizeTerminalObserverChunk(text: string): string {
@@ -2112,7 +2489,7 @@ function sanitizeTerminalLogPreview(text: string): string {
 
 export function executeShell(command: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    exec(command, (error, stdout, stderr) => {
+    exec(command, { env: buildChildProcessEnvironment() }, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(stderr || error.message))
         return

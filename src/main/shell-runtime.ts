@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
+import { buildChildProcessEnvironment } from './child-process-env'
 
 export async function normalizeRuntimeEnv(): Promise<void> {
   if (process.platform === 'win32') return
@@ -87,7 +88,10 @@ function resolveUnixShell(): string {
 function readShellFromGetent(): string | undefined {
   if (typeof process.getuid !== 'function') return undefined
   const uid = process.getuid()
-  const getent = spawnSync('getent', ['passwd', String(uid)], { encoding: 'utf-8' })
+  const getent = spawnSync('getent', ['passwd', String(uid)], {
+    encoding: 'utf-8',
+    env: buildChildProcessEnvironment()
+  })
   if (getent.status !== 0 || !getent.stdout) return undefined
   const fields = getent.stdout.trim().split(':')
   const shell = fields[6]
@@ -98,7 +102,10 @@ function readShellFromGetent(): string | undefined {
 function canExecute(command: string): boolean {
   if (command.includes('/') || command.includes('\\')) return existsSync(command)
   const checker = process.platform === 'win32' ? 'where' : 'which'
-  const result = spawnSync(checker, [command], { stdio: 'ignore' })
+  const result = spawnSync(checker, [command], {
+    env: buildChildProcessEnvironment(),
+    stdio: 'ignore'
+  })
   return result.status === 0
 }
 

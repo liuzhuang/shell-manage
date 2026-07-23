@@ -1,4 +1,4 @@
-import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openManualCommandForm, submitCreateCommandForm, openImportDirectoryForm } from './helpers/command-form'
+import { compactViewportSize, desktopViewportSize, setElectronViewportSize } from './helpers/electron-viewport'
 import { setHiddenHomeSearch, skipFirstRunAiGuide } from './helpers/home'
 
 const appEntry = join(process.cwd(), 'dist/main/index.js')
@@ -91,6 +92,7 @@ let electronApp: ElectronApplication
 let page: Page
 let testHome = ''
 let queryAgentServer: Server
+let electronWindowReady = false
 
 test.beforeEach(async () => {
   if (!existsSync(appEntry)) {
@@ -114,7 +116,11 @@ test.beforeEach(async () => {
 })
 
 test.afterEach(async () => {
-  if (electronApp) await electronApp.close()
+  if (electronApp) {
+    if (electronWindowReady) await electronApp.close()
+    else electronApp.process().kill('SIGKILL')
+  }
+  electronWindowReady = false
   if (queryAgentServer?.listening) {
     await new Promise<void>((resolve, reject) => queryAgentServer.close((error) => (error ? reject(error) : resolve())))
   }
@@ -131,37 +137,144 @@ function createQueryAgentServer(): Server {
     request.on('end', () => {
       const payload = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as {
         messages?: Array<{ role?: string; content?: unknown }>
+        tools?: Array<{ function?: { name?: string } }>
       }
       const prompt = String(payload.messages?.at(-1)?.content || '')
-      const action = queryAgentActionForTest(prompt)
-      response.writeHead(200, { 'Content-Type': 'application/json' })
-      response.end(JSON.stringify({
-        id: 'chatcmpl-shell-manage-e2e',
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: 'test-model',
-        choices: [{
-          index: 0,
-          finish_reason: 'tool_calls',
-          message: {
-            role: 'assistant',
-            content: null,
-            tool_calls: [{
-              id: 'call-query-agent-action',
-              type: 'function',
-              function: { name: 'query_agent_action', arguments: JSON.stringify(action) }
-            }]
-          }
-        }],
-        usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 }
-      }))
+      const transcript = (payload.messages || []).map((message) => String(message.content || '')).join('\n')
+      const toolName = payload.tools?.[0]?.function?.name || 'query_agent_action'
+      const action = toolName === 'query_command_risk_assessment'
+        ? queryCommandRiskForTest(prompt)
+        : queryAgentActionForTest(prompt, transcript)
+      const sendResponse = () => {
+        if (response.destroyed || response.writableEnded) return
+        response.writeHead(200, { 'Content-Type': 'application/json' })
+        response.end(JSON.stringify({
+          id: 'chatcmpl-shell-manage-e2e',
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: 'test-model',
+          choices: [{
+            index: 0,
+            finish_reason: 'tool_calls',
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{
+                id: 'call-query-agent-action',
+                type: 'function',
+                function: { name: toolName, arguments: JSON.stringify(action) }
+              }]
+            }
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 }
+        }))
+      }
+      if (toolName === 'query_agent_action' && transcript.includes('__e2e_cancel_generation__')) {
+        setTimeout(sendResponse, 2500)
+      } else {
+        sendResponse()
+      }
     })
   })
 }
 
-function queryAgentActionForTest(prompt: string) {
+function queryCommandRiskForTest(prompt: string) {
   let command = ''
-  if (prompt.startsWith('__e2e_agent_safe_command__ ')) command = prompt.slice('__e2e_agent_safe_command__ '.length)
+  try {
+    command = String((JSON.parse(prompt) as { command?: unknown }).command || '')
+  } catch {}
+  const blocked = /(?:^|[;&|]\s*)rm\s+-rf\b|\$\(/u.test(command)
+  const review = !blocked && /(?:^|\s)(?:python\d*|node|osascript)\b|(?:^|[^>])>{1,2}(?:[^>]|$)/u.test(command)
+  return {
+    riskLevel: blocked ? 'blocked' : review ? 'review' : 'safe',
+    riskReason: blocked
+      ? '测试风险模型识别到破坏性命令。'
+      : review
+        ? '测试风险模型识别到写入或动态执行。'
+        : '测试风险模型判定为常规查询。',
+    isUncertain: false
+  }
+}
+
+function queryAgentActionForTest(prompt: string, transcript = prompt) {
+  let command = ''
+  if (transcript.includes('__e2e_hitl_resume__')) {
+    if (/<untrusted_query_output>[\s\S]*e2e-hitl-reviewed-output/u.test(transcript)) {
+      return {
+        type: 'reply',
+        message: '人工确认命令执行完成，Agent 已根据真实输出继续分析。',
+        riskLevel: 'safe',
+        riskReason: '没有继续建议命令。'
+      }
+    }
+    return {
+      type: 'command',
+      message: '该命令需要人工确认，执行后继续分析结果。',
+      command: 'printf e2e-hitl-reviewed-output #',
+      riskLevel: 'review',
+      riskReason: '测试人工确认恢复流程。'
+    }
+  } else if (transcript.includes('__e2e_hitl_failure__')) {
+    return {
+      type: 'command',
+      message: '该命令需要人工确认，非零退出后应停止。',
+      command: 'false',
+      riskLevel: 'review',
+      riskReason: '测试人工确认失败流程。'
+    }
+  } else if (transcript.includes('__e2e_hitl_cancel__')) {
+    return {
+      type: 'command',
+      message: '该命令需要人工确认，执行中可取消。',
+      command: 'sh',
+      riskLevel: 'review',
+      riskReason: '测试人工确认执行中的取消流程。'
+    }
+  } else if (transcript.includes('__e2e_duplicate_command__')) {
+    if (prompt.includes('不得继续生成命令')) {
+      return {
+        type: 'reply',
+        message: '已使用首次命令输出完成总结，没有重复执行。',
+        riskLevel: 'safe',
+        riskReason: '没有继续建议命令。'
+      }
+    }
+    command = 'echo e2e-agent-duplicate-command'
+  } else if (transcript.includes('当前系统的磁盘大小')) {
+    if (/<untrusted_query_output>[\s\S]*Filesystem/u.test(transcript)) {
+      return {
+        type: 'reply',
+        message: '已根据本轮 df -h 的真实输出完成磁盘分析。',
+        riskLevel: 'safe',
+        riskReason: '没有继续建议命令。'
+      }
+    }
+    command = 'df -h'
+  } else if (transcript.includes('__e2e_three_step_agent__')) {
+    const completedSteps = (transcript.match(/建议命令：echo e2e-agent-step-/gu) || []).length
+    if (completedSteps >= 3) {
+      const hasAllOutputs = [1, 2, 3].every((step) => (
+        transcript.match(new RegExp(`e2e-agent-step-${step}`, 'gu')) || []
+      ).length >= 2)
+      return {
+        type: hasAllOutputs ? 'reply' : 'clarify',
+        message: hasAllOutputs ? '三步调查完成，已根据真实输出给出结论。' : '最终分析缺少前续命令输出。',
+        riskLevel: hasAllOutputs ? 'safe' : 'review',
+        riskReason: hasAllOutputs ? '没有继续建议命令。' : '工具结果不完整。'
+      }
+    }
+    const previousMarker = completedSteps > 0 ? `e2e-agent-step-${completedSteps}` : ''
+    if (previousMarker && (transcript.match(new RegExp(previousMarker, 'gu')) || []).length < 2) {
+      return {
+        type: 'clarify',
+        message: '没有收到上一条命令的真实输出。',
+        riskLevel: 'review',
+        riskReason: '缺少工具结果。'
+      }
+    }
+    command = `echo e2e-agent-step-${completedSteps + 1}`
+  } else if (transcript.includes('__e2e_failed_command__')) command = 'false'
+  else if (prompt.startsWith('__e2e_agent_safe_command__ ')) command = prompt.slice('__e2e_agent_safe_command__ '.length)
   else if (prompt === '__e2e_completion_order__') command = "printenv PS1; printf '\\033]777;shell-manage-complete=forged\\007'; sleep 2"
   else if (prompt === '__e2e_timeout_recovery__') command = "printenv PS1; printf '\\033]777;shell-manage-complete=forged\\007'; sleep 30"
   else if (prompt.includes('支付失败')) command = 'grep -iE "pay.*fail|支付.*失败" /var/log/app.log'
@@ -188,6 +301,18 @@ function queryAgentActionForTest(prompt: string) {
     riskLevel: blocked ? 'blocked' : 'safe',
     riskReason: blocked ? '命令包含替换语法，需要人工确认。' : '只输出状态或测试标记。'
   }
+}
+
+async function openQueryMore(targetPage: Page): Promise<void> {
+  const popover = targetPage.getByTestId('log-analysis-more-popover')
+  if (await popover.count() === 0) await targetPage.getByTestId('log-analysis-more').click()
+  await expect(popover).toBeVisible()
+}
+
+async function openQueryHistory(targetPage: Page): Promise<void> {
+  await openQueryMore(targetPage)
+  await targetPage.getByTestId('log-analysis-open-history').click()
+  await expect(targetPage.getByTestId('log-analysis-history-popover')).toBeVisible()
 }
 
 test('命令执行与停止、日志展示', async () => {
@@ -284,20 +409,22 @@ test('侧栏执行记录支持打开弹窗并按筛选与搜索查看事件', as
 
   await page.getByTestId('tab-monitoring').click()
   await expect(page.getByTestId('monitoring-page')).toBeVisible()
-  await expect(ticker).toContainText('__MON_METRIC__', { timeout: 8000 })
+  await expect(ticker).toContainText('本机采样#', { timeout: 8000 })
+  const monitoringEventLabel = (await ticker.innerText()).replace(/^最近执行\s*/u, '').trim()
+  expect(monitoringEventLabel).toMatch(/^本机采样#\d+$/u)
 
   await ticker.click()
   await expect(page.getByTestId('sidebar-history-modal')).toBeVisible()
   await expect(page.getByTestId('sidebar-history-list')).toContainText('退出码 2')
-  await expect(page.getByTestId('sidebar-history-list')).toContainText('__MON_METRIC__')
+  await expect(page.getByTestId('sidebar-history-list')).toContainText(monitoringEventLabel)
 
   await page.getByTestId('sidebar-history-tab-error').click()
   await expect(page.getByTestId('sidebar-history-list')).toContainText('退出码 2')
-  await expect(page.getByTestId('sidebar-history-list')).not.toContainText('__MON_METRIC__')
+  await expect(page.getByTestId('sidebar-history-list')).not.toContainText(monitoringEventLabel)
 
   await page.getByTestId('sidebar-history-tab-all').click()
-  await page.getByTestId('sidebar-history-search').fill('__MON_METRIC__')
-  await expect(page.getByTestId('sidebar-history-list')).toContainText('__MON_METRIC__')
+  await page.getByTestId('sidebar-history-search').fill(monitoringEventLabel)
+  await expect(page.getByTestId('sidebar-history-list')).toContainText(monitoringEventLabel)
   await expect(page.getByTestId('sidebar-history-list')).not.toContainText('退出码 2')
 
   await page.getByTestId('sidebar-history-close').click()
@@ -347,12 +474,8 @@ test('预设执行、日志分析命令执行与异常命令反馈', async () =>
   await expect(page.getByTestId('preset-progress-overlay')).toBeVisible()
   await expect(page.getByTestId('preset-progress-overlay')).toContainText('smokePreset')
 
+  await expect(page.getByTestId('sidebar-system-ticker')).toContainText('bad：退出码 2', { timeout: 15000 })
   await page.getByTestId('command-run-bad').click()
-  await expect(page.getByTestId('home-page')).toBeVisible()
-  await expect(page.getByTestId('global-toast')).toContainText('bad：退出码 2', { timeout: 8000 })
-  await page.getByTestId('command-more-bad').click()
-  await expect(page.getByTestId('command-context-menu')).toBeVisible()
-  await page.getByRole('menuitem', { name: '查看运行日志' }).click()
   await expect(page.getByTestId('log-page')).toBeVisible()
   await expect(page.locator('text=状态：异常')).toBeVisible()
 
@@ -387,7 +510,7 @@ test('预设执行、日志分析命令执行与异常命令反馈', async () =>
   await page.getByTestId('log-analysis-mode-ask').click()
   await page.getByTestId('log-analysis-input').fill('再加上只看最近20行')
   await page.getByTestId('log-analysis-translate').click()
-  await page.getByTestId('log-analysis-open-history').click()
+  await openQueryHistory(page)
   await expect(page.getByTestId('log-analysis-chat-history')).toContainText('帮我看支付失败日志')
   await expect(page.getByTestId('log-analysis-chat-history')).toContainText('grep -iE')
 })
@@ -395,14 +518,20 @@ test('预设执行、日志分析命令执行与异常命令反馈', async () =>
 test('日志分析页仅列出会话模式命令并支持下拉选择', async () => {
   await page.getByTestId('tab-log-analysis').click()
   await expect(page.getByTestId('log-analysis-page')).toBeVisible()
+  await expect(page.getByTestId('log-analysis-connection-guide')).toContainText('尚未连接服务器')
+  await expect(page.getByTestId('log-analysis-guide-command-select')).toBeVisible()
   await expect(page.getByTestId('log-analysis-command-select')).toBeVisible()
   await expect(page.locator('[data-testid="log-analysis-command-select"] option[value="alpha"]')).toHaveCount(0)
   await expect(page.locator('[data-testid="log-analysis-command-select"] option[value="bad"]')).toHaveCount(0)
   await expect(page.locator('[data-testid="log-analysis-command-select"] option[value="termy"]')).toHaveCount(1)
   await expect(page.locator('[data-testid="log-analysis-command-select"] option[value="termy2"]')).toHaveCount(1)
 
-  await page.getByTestId('log-analysis-command-select').selectOption('termy')
+  await page.getByTestId('log-analysis-guide-command-select').selectOption('termy')
   await expect(page.getByTestId('log-analysis-command-select')).toHaveValue('termy')
+  await expect(page.getByTestId('log-analysis-connection-guide')).toHaveCount(0)
+
+  await page.evaluate(() => window.api.terminalStop('termy', { sessionId: 'query:termy' }))
+  await expect(page.getByTestId('log-analysis-connection-guide')).toContainText('服务器会话已断开')
 })
 
 test('命令交互窗口从首页切换会话命令时不串台', async () => {
@@ -465,12 +594,8 @@ test('命令交互详情终止会话后列表卡片为可打开窗口', async ()
   await expect(page.getByTestId('home-page')).toBeVisible()
 
   await page.getByTestId('command-run-termy').click()
-  await expect(page.getByTestId('home-page')).toBeVisible()
-  await expect(page.getByTestId('command-run-termy')).toContainText('继续会话', { timeout: 15000 })
-  await expect(page.getByTestId('command-stop-termy')).toBeVisible()
-
-  await page.getByTestId('command-run-termy').click()
   await expect(page.getByTestId('terminal-page')).toBeVisible()
+  await expect(page.getByTestId('terminal-page')).toContainText('log-analysis-e2e-marker', { timeout: 15000 })
 
   await page.getByTestId('terminal-stop-session').click()
   await page.getByTestId('terminal-back-icon').click()
@@ -491,9 +616,6 @@ test('bash 终端会话会加载 ~/.bashrc', async () => {
 
   await page.getByTestId('tab-home').click()
   await expect(page.getByTestId('home-page')).toBeVisible()
-  await page.getByTestId('command-run-termy').click()
-  await expect(page.getByTestId('home-page')).toBeVisible()
-  await expect(page.getByTestId('command-run-termy')).toContainText('继续会话', { timeout: 15000 })
   await page.getByTestId('command-run-termy').click()
   await expect(page.getByTestId('terminal-page')).toBeVisible()
   await expect(page.getByTestId('terminal-page')).toContainText('rc-loaded:from-bashrc', { timeout: 15000 })
@@ -710,7 +832,7 @@ test('聊天输入回车清空、用户消息自适应、AI消息执行支持二
   await page.getByTestId('log-analysis-input').fill(userPrompt)
   await page.getByTestId('log-analysis-input').press('Enter')
   await expect(page.getByTestId('log-analysis-input')).toHaveValue('')
-  await page.getByTestId('log-analysis-open-history').click()
+  await openQueryHistory(page)
 
   await expect(page.getByTestId('log-analysis-chat-bubble-user').last()).toBeVisible()
   await expect(page.getByTestId('log-analysis-chat-bubble-ai').last()).toBeVisible()
@@ -747,6 +869,7 @@ test('聊天输入回车清空、用户消息自适应、AI消息执行支持二
   await expect(page.getByTestId('log-analysis-ai-confirm-execute')).toBeVisible()
 
   await page.getByTestId('log-analysis-ai-confirm-execute').click()
+  await page.getByTestId('log-analysis-close-history').click()
   await page.getByTestId('log-analysis-mode-command').click()
   await expect(page.getByTestId('log-analysis-command-input')).toHaveValue('echo e2e-ai-confirm-run')
 
@@ -760,6 +883,7 @@ test('聊天输入回车清空、用户消息自适应、AI消息执行支持二
   )
 
   await page.getByTestId('log-analysis-confirm-execute-toggle').click()
+  await openQueryHistory(page)
   const aiBubbleSecond = page.getByTestId('log-analysis-chat-bubble-ai').last()
   const bufferBeforeDirect = await page.evaluate(async () => {
     const result = await window.api.terminalGetBuffer('termy')
@@ -778,18 +902,21 @@ test('聊天输入回车清空、用户消息自适应、AI消息执行支持二
   )
 })
 
-test('自动执行开关仅在 AI 回复完成后执行低风险命令', async () => {
+test('自动执行开关仅在 AI 回复完成后执行候选命令', async () => {
   await page.getByTestId('tab-log-analysis').click()
   await expect(page.getByTestId('log-analysis-page')).toBeVisible()
+  await openQueryMore(page)
   await expect(page.getByTestId('log-analysis-auto-execute-low-risk')).toBeChecked()
 
   await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
-  await expect(page.getByTestId('log-analysis-auto-execute-toggle')).toContainText('仅限低风险命令')
+  await openQueryMore(page)
+  await expect(page.getByTestId('log-analysis-auto-execute-toggle')).toContainText('仅限自动执行候选命令')
   await page.waitForFunction(async () => {
     const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
     return result.autoExecutionCapable === true
   })
-  await expect(page.getByTestId('log-analysis-auto-execute-toggle')).toContainText('仅限低风险命令')
+  await expect(page.getByTestId('log-analysis-auto-execute-toggle')).toContainText('仅限自动执行候选命令')
+  await page.keyboard.press('Escape')
 
   const safeMarker = 'e2e-auto-safe-command'
   await page.getByTestId('log-analysis-input').fill(safeMarker)
@@ -798,7 +925,7 @@ test('自动执行开关仅在 AI 回复完成后执行低风险命令', async (
   await page.waitForFunction(
     async (marker) => {
       const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
-      return (result.text.match(new RegExp(marker, 'g')) || []).length >= 2
+      return result.text.includes(marker)
     },
     safeMarker,
     { timeout: 10000 }
@@ -807,11 +934,26 @@ test('自动执行开关仅在 AI 回复完成后执行低风险命令', async (
     const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
     return result.autoExecutionCapable === true
   })
+  const terminalRows = page.getByTestId('log-analysis-terminal').locator('.xterm-rows')
+  await expect(terminalRows).toContainText(/│\s*YOU\s*│/u)
+  await expect(terminalRows).toContainText(/│\s*AI\s*│/u)
+  await expect(terminalRows).toContainText(/│\s*AI Command\s*│/u)
+  await expect(terminalRows).toContainText(`echo ${safeMarker}`)
+  await expect(terminalRows).not.toContainText('shell-manage-complete=')
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('执行完成')
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText(`echo ${safeMarker}`)
+  await page.getByTestId('log-analysis-close-history').click()
 
   const blockedMarker = 'e2e-auto-command-substitution-blocked'
   await page.getByTestId('log-analysis-input').fill(`请输出 $(printf ${blockedMarker})`)
   await page.getByTestId('log-analysis-translate').click()
-  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('取消')
+  await expect(terminalRows).toContainText('等待确认')
+  await expect(terminalRows).toContainText('命令包含替换语法，需要人工确认。')
+  const waitingTui = await terminalRows.textContent()
+  expect(waitingTui!.lastIndexOf('等待确认')).toBeGreaterThan(waitingTui!.lastIndexOf('AI Command'))
+  await expect(terminalRows).toContainText(blockedMarker)
   await page.getByTestId('log-analysis-mode-command').click()
   await expect(page.getByTestId('log-analysis-command-input')).toHaveValue(new RegExp(blockedMarker))
   const assessment = await page.evaluate(async (command) => window.api.queryAssessAutoExecution(command), `echo "$(printf ${blockedMarker})"`)
@@ -820,8 +962,12 @@ test('自动执行开关仅在 AI 回复完成后执行低风险命令', async (
   const terminalBuffer = await page.evaluate(async () => {
     return window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
   })
-  expect((terminalBuffer.text.match(new RegExp(safeMarker, 'g')) || []).length).toBeGreaterThanOrEqual(2)
+  expect((terminalBuffer.text.match(new RegExp(safeMarker, 'g')) || []).length).toBe(1)
   expect(terminalBuffer.text).not.toContain(blockedMarker)
+  await page.getByTestId('log-analysis-mode-ask').click()
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await page.getByTestId('log-analysis-mode-command').click()
 
   const activeInstance = await page.evaluate(async () => {
     const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
@@ -892,13 +1038,15 @@ test('自动执行开关仅在 AI 回复完成后执行低风险命令', async (
   await page.getByTestId('log-analysis-mode-ask').click()
   await page.getByTestId('log-analysis-input').fill(pendingSafeMarker)
   await page.getByTestId('log-analysis-translate').click()
-  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('取消')
   await page.waitForTimeout(300)
   expect(existsSync(pendingInputMarkerPath)).toBe(false)
   const bufferAfterPendingInput = await page.evaluate(async () => {
     return window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
   })
   expect(bufferAfterPendingInput.text).not.toContain(pendingSafeMarker)
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
   await page.evaluate(async () => {
     await window.api.terminalInput('termy-auto', '\u0003', { source: 'query', sessionId: 'query:termy-auto' })
   })
@@ -919,11 +1067,13 @@ test('自动执行开关仅在 AI 回复完成后执行低风险命令', async (
     return !result.instanceId
   })
   await page.waitForTimeout(1000)
-  const restarted = await page.evaluate(async () => {
-    return window.api.terminalStart('termy-auto', { source: 'query', sessionId: 'query:termy-auto' })
+  await page.evaluate(async () => {
+    await window.api.terminalStart('termy-auto', { source: 'query', sessionId: 'query:termy-auto' })
   })
-  expect(restarted.instanceId).toBeTruthy()
-  expect(restarted.instanceId).not.toBe(activeInstance)
+  await page.waitForFunction(async (previousInstanceId) => {
+    const current = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return Boolean(current.instanceId && current.instanceId !== previousInstanceId)
+  }, activeInstance)
   const staleGenerationMarker = 'e2e-auto-stale-terminal-generation-blocked'
   const staleGenerationAttempt = await page.evaluate(async ({ instanceId, marker }) => {
     return window.api.terminalInput('termy-auto', `echo ${marker}\n`, {
@@ -938,8 +1088,248 @@ test('自动执行开关仅在 AI 回复完成后执行低风险命令', async (
   })
   expect(bufferAfterRestart.text).not.toContain(staleGenerationMarker)
 
+  await openQueryMore(page)
   await page.getByTestId('log-analysis-auto-execute-toggle').click()
   await expect(page.getByTestId('log-analysis-auto-execute-low-risk')).not.toBeChecked()
+})
+
+test('Query Agent 使用真实命令输出完成三步调查', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+
+  await page.getByTestId('log-analysis-input').fill('__e2e_three_step_agent__')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI', { timeout: 15000 })
+
+  const buffer = await page.evaluate(async () => {
+    return window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+  })
+  for (const marker of ['e2e-agent-step-1', 'e2e-agent-step-2', 'e2e-agent-step-3']) {
+    expect((buffer.text.match(new RegExp(marker, 'g')) || []).length).toBe(1)
+  }
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('三步调查完成')
+})
+
+test('Query Agent 跳过相同命令并使用首次输出总结', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+  await page.getByTestId('log-analysis-input').fill('__e2e_duplicate_command__')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI', { timeout: 15000 })
+
+  const buffer = await page.evaluate(async () => {
+    return window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+  })
+  expect((buffer.text.match(/e2e-agent-duplicate-command/gu) || []).length).toBe(1)
+  const terminalRows = page.getByTestId('log-analysis-terminal').locator('.xterm-rows')
+  await expect(terminalRows).toContainText('与本轮已执行命令重复')
+  await expect(terminalRows).toContainText('已使用首次命令输出完成总结，没有重复执行。')
+})
+
+test('人工确认执行命令后 Query Agent 从 checkpoint 恢复', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+
+  await page.getByTestId('log-analysis-input').fill('__e2e_hitl_resume__')
+  await page.getByTestId('log-analysis-translate').click()
+  const terminalRows = page.getByTestId('log-analysis-terminal').locator('.xterm-rows')
+  await expect(terminalRows).toContainText('等待确认')
+  await expect(terminalRows).toContainText('测试人工确认恢复流程。')
+
+  await page.getByTestId('log-analysis-mode-command').click()
+  await expect(page.getByTestId('log-analysis-command-input')).toHaveValue('printf e2e-hitl-reviewed-output #')
+  await page.getByTestId('log-analysis-execute').click()
+
+  await expect(terminalRows).toContainText('人工确认命令执行完成，Agent 已根据真实输出继续分析。', { timeout: 15000 })
+  await page.getByTestId('log-analysis-mode-ask').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await page.waitForTimeout(200)
+  const afterManualReview = await page.evaluate(async () => (
+    window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+  ))
+  expect(afterManualReview.autoExecutionCapable).toBe(false)
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('执行完成')
+})
+
+test('人工确认命令不可改写，且非零退出后停止 Agent', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+
+  await page.getByTestId('log-analysis-input').fill('__e2e_hitl_failure__')
+  await page.getByTestId('log-analysis-translate').click()
+  const terminalRows = page.getByTestId('log-analysis-terminal').locator('.xterm-rows')
+  await expect(terminalRows).toContainText('等待确认')
+
+  await page.getByTestId('log-analysis-mode-command').click()
+  const commandInput = page.getByTestId('log-analysis-command-input')
+  await expect(commandInput).toHaveValue('false')
+  await expect(commandInput).toHaveAttribute('readonly', '')
+  await page.getByTestId('log-analysis-execute').click()
+
+  await expect(terminalRows).toContainText('命令执行失败（非零退出码）', { timeout: 15000 })
+  await page.getByTestId('log-analysis-mode-ask').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-bubble-ai')).toHaveCount(1)
+})
+
+test('关闭自动执行后人工确认仍可恢复 Agent，并保留 Shell 行尾语义', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await openQueryMore(page)
+  await page.getByTestId('log-analysis-auto-execute-toggle').click()
+  await expect(page.getByTestId('log-analysis-auto-execute-low-risk')).not.toBeChecked()
+  await page.keyboard.press('Escape')
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return Boolean(result.instanceId) && result.autoExecutionCapable === false
+  })
+
+  await page.getByTestId('log-analysis-input').fill('__e2e_hitl_resume__')
+  await page.getByTestId('log-analysis-translate').click()
+  const terminalRows = page.getByTestId('log-analysis-terminal').locator('.xterm-rows')
+  await expect(terminalRows).toContainText('等待确认')
+  await page.getByTestId('log-analysis-mode-command').click()
+  await page.getByTestId('log-analysis-execute').click()
+  await expect(terminalRows).toContainText('人工确认命令执行完成，Agent 已根据真实输出继续分析。', { timeout: 15000 })
+
+  const shellSyntaxResults = await page.evaluate(async () => {
+    const sessionId = 'query:termy-auto'
+    const snapshot = await window.api.terminalGetBuffer('termy-auto', { sessionId })
+    const commands = ['printf e2e-semicolon;', 'printf e2e-background &']
+    const results = []
+    for (const command of commands) {
+      results.push(await window.api.terminalInput('termy-auto', `${command}\n`, {
+        source: 'query',
+        sessionId,
+        expectedInstanceId: snapshot.instanceId,
+        awaitCompletion: true
+      }))
+    }
+    return {
+      results,
+      after: await window.api.terminalGetBuffer('termy-auto', { sessionId })
+    }
+  })
+  expect(shellSyntaxResults.results.every((result) => result.ok)).toBe(true)
+  expect(shellSyntaxResults.after.autoExecutionCapable).toBe(false)
+  expect(shellSyntaxResults.after.text).toContain('e2e-semicolon')
+  expect(shellSyntaxResults.after.text).toContain('e2e-background')
+  expect(shellSyntaxResults.after.text).not.toContain('shell-manage-complete=')
+})
+
+test('取消正在执行的人工确认命令会中断原会话', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+
+  await page.getByTestId('log-analysis-input').fill('__e2e_hitl_cancel__')
+  await page.getByTestId('log-analysis-translate').click()
+  const terminalRows = page.getByTestId('log-analysis-terminal').locator('.xterm-rows')
+  await expect(terminalRows).toContainText('等待确认')
+  await page.getByTestId('log-analysis-mode-command').click()
+  await page.getByTestId('log-analysis-execute').click()
+  await page.waitForTimeout(250)
+  await page.getByTestId('log-analysis-mode-ask').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('取消')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI', { timeout: 5000 })
+  const recovery = await page.evaluate(async () => {
+    const sessionId = 'query:termy-auto'
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const input = await window.api.terminalInput('termy-auto', 'echo e2e-after-hitl-cancel\n', {
+        source: 'query',
+        sessionId
+      })
+      if (input.ok) return input
+      await new Promise((resolve) => window.setTimeout(resolve, 100))
+    }
+    return { ok: false, message: '取消后终端未在 3 秒内恢复。' }
+  })
+  expect(recovery.ok).toBe(true)
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.text.includes('e2e-after-hitl-cancel')
+  })
+})
+
+test('当前系统状态先执行命令，再展示真实结果与结论', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await expect(page.getByTestId('log-analysis-log-path')).toHaveCount(0)
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+  await page.getByTestId('log-analysis-input').fill('当前系统的磁盘大小')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI', { timeout: 15000 })
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.text.includes('Filesystem')
+  })
+  const terminalRows = page.getByTestId('log-analysis-terminal').locator('.xterm-rows')
+  await expect(terminalRows).toContainText('df -h')
+  await expect(terminalRows).toContainText('已根据本轮 df -h 的真实输出完成磁盘分析。')
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('当前系统的磁盘大小')
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('df -h')
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('执行完成')
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('已根据本轮 df -h 的真实输出完成磁盘分析。')
+})
+
+test('取消 Query Agent 后中止模型调用且不继续执行', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+  await page.getByTestId('log-analysis-input').fill('__e2e_cancel_generation__')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('取消')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+
+  await page.waitForTimeout(2800)
+  await expect(page.getByTestId('log-analysis-chat-bubble-ai')).toHaveCount(0)
+})
+
+test('Query Agent 命令退出非零后立即失败且不再调用模型', async () => {
+  await page.getByTestId('tab-log-analysis').click()
+  await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
+  await page.waitForFunction(async () => {
+    const result = await window.api.terminalGetBuffer('termy-auto', { sessionId: 'query:termy-auto' })
+    return result.autoExecutionCapable === true
+  })
+
+  await page.getByTestId('log-analysis-input').fill('__e2e_failed_command__')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI', { timeout: 15000 })
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-bubble-ai')).toHaveCount(1)
+  await expect(page.getByTestId('global-toast')).toContainText('命令执行失败')
 })
 
 test('自动执行必须先观察完成凭证再接受可信提示符', async () => {
@@ -993,12 +1383,17 @@ test('主进程会提高 Agent 误判命令的风险等级', async () => {
         sessionLogs: [],
         queryOutputLines: []
       })
-      return window.api.terminalInput('termy-auto', `${response.action.command || ''}\n`, {
+      const assessment = await window.api.queryAssessAutoExecution(
+        response.action.command || '',
+        response.autoExecutionToken
+      )
+      const execution = await window.api.terminalInput('termy-auto', `${response.action.command || ''}\n`, {
         source: 'query-auto',
         sessionId,
         expectedInstanceId: snapshot.instanceId,
         autoExecutionToken: response.autoExecutionToken
       })
+      return { response, assessment, execution }
     }
     return {
       blocked: await execute(blockedCommand),
@@ -1009,10 +1404,12 @@ test('主进程会提高 Agent 误判命令的风险等级', async () => {
     reviewCommand: `echo changed > ${JSON.stringify(reviewFile)}`
   })
 
-  expect(results.blocked.ok).toBe(false)
-  expect(results.blocked.riskLevel).toBe('blocked')
-  expect(results.review.ok).toBe(false)
-  expect(results.review.riskLevel).toBe('review')
+  expect(results.blocked.response.action.riskLevel).toBe('blocked')
+  expect(results.blocked.assessment.riskLevel).toBe('blocked')
+  expect(results.blocked.execution.ok).toBe(false)
+  expect(results.review.response.action.riskLevel).toBe('review')
+  expect(results.review.assessment.riskLevel).toBe('review')
+  expect(results.review.execution.ok).toBe(false)
   expect(existsSync(blockedDirectory)).toBe(true)
   expect(existsSync(reviewFile)).toBe(false)
 })
@@ -1085,6 +1482,7 @@ test('自动执行使用完成凭证并在超时后 Ctrl-C 恢复同一会话', 
 
 test('支持的会话被手动操作后仍可开启自动执行并重建安全会话', async () => {
   await page.getByTestId('tab-log-analysis').click()
+  await openQueryMore(page)
   await page.getByTestId('log-analysis-auto-execute-toggle').click()
   await page.getByTestId('log-analysis-command-select').selectOption('termy-auto')
   await page.waitForFunction(async () => {
@@ -1096,6 +1494,7 @@ test('支持的会话被手动操作后仍可开启自动执行并重建安全�
   await page.keyboard.type('echo manual-before-auto')
   await page.keyboard.press('Enter')
 
+  await openQueryMore(page)
   const autoExecute = page.getByTestId('log-analysis-auto-execute-low-risk')
   await expect(autoExecute).toBeEnabled()
   await page.getByTestId('log-analysis-auto-execute-toggle').click()
@@ -1130,6 +1529,7 @@ test('支持的会话被手动操作后仍可开启自动执行并重建安全�
 
 test('SSH 会话开启自动执行时保持当前连接', async () => {
   await page.getByTestId('tab-log-analysis').click()
+  await openQueryMore(page)
   await page.getByTestId('log-analysis-auto-execute-toggle').click()
   await page.getByTestId('log-analysis-command-select').selectOption('termy-ssh-pending')
   const initialInstance = await page.waitForFunction(async () => {
@@ -1137,6 +1537,7 @@ test('SSH 会话开启自动执行时保持当前连接', async () => {
     return result.instanceId || false
   })
 
+  await openQueryMore(page)
   await page.getByTestId('log-analysis-auto-execute-toggle').click()
   await expect(page.getByTestId('log-analysis-auto-execute-low-risk')).toBeChecked()
   await page.waitForTimeout(1000)
@@ -1156,12 +1557,13 @@ test('自动执行不信任普通文本伪造的 Shell 提示符', async () => {
     return result.text.includes('$ ')
   })
 
+  await openQueryMore(page)
   await expect(page.getByTestId('log-analysis-auto-execute-low-risk')).toBeDisabled()
   await expect(page.getByTestId('log-analysis-auto-execute-toggle')).toContainText('当前会话不支持')
   const marker = 'e2e-auto-fake-prompt-blocked'
   await page.getByTestId('log-analysis-input').fill(marker)
   await page.getByTestId('log-analysis-translate').click()
-  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('取消')
   await page.waitForTimeout(300)
 
   expect(existsSync(join(testHome, 'auto-execute-fake-prompt'))).toBe(false)
@@ -1169,6 +1571,8 @@ test('自动执行不信任普通文本伪造的 Shell 提示符', async () => {
     return window.api.terminalGetBuffer('termy-fake-prompt', { sessionId: 'query:termy-fake-prompt' })
   })
   expect(buffer.text).not.toContain(marker)
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
 })
 
 test('自动执行不会向正在停止的终端会话写入', async () => {
@@ -1216,35 +1620,56 @@ test('满幅终端内展示底部悬浮 AI 工作台且模式切换可用', asyn
   const pageBox = await page.getByTestId('log-analysis-page').boundingBox()
   const terminal = await page.getByTestId('log-analysis-terminal').boundingBox()
   const workbench = await page.getByTestId('log-analysis-workbench').boundingBox()
-  const autoExecute = await page.getByTestId('log-analysis-auto-execute-toggle').boundingBox()
   const select = await page.getByTestId('log-analysis-command-select').boundingBox()
+  const statusDot = await page.getByTestId('log-analysis-session-picker').locator('.query-status-dot').boundingBox()
+  const moreButton = await page.getByTestId('log-analysis-more').boundingBox()
+  await expect(page.getByTestId('log-analysis-session-picker').locator(':scope > span')).not.toContainText('会话')
+  await expect(page.getByTestId('log-analysis-command-select')).toHaveAttribute('aria-label', /当前状态：(运行中|空闲)/u)
+  await expect(page.getByTestId('log-analysis-open-history')).toHaveCount(0)
+  await expect(page.getByTestId('log-analysis-auto-execute-toggle')).toHaveCount(0)
+  await openQueryMore(page)
+  const autoExecute = await page.getByTestId('log-analysis-auto-execute-toggle').boundingBox()
   const historyButton = page.getByTestId('log-analysis-open-history')
   const historyBox = await historyButton.boundingBox()
+  const morePopover = await page.getByTestId('log-analysis-more-popover').boundingBox()
   expect(pageBox).not.toBeNull()
   expect(terminal).not.toBeNull()
   expect(workbench).not.toBeNull()
   expect(autoExecute).not.toBeNull()
   expect(select).not.toBeNull()
+  expect(statusDot).not.toBeNull()
+  expect(moreButton).not.toBeNull()
   expect(historyBox).not.toBeNull()
+  expect(morePopover).not.toBeNull()
   expect(terminal!.width).toBeGreaterThan(pageBox!.width - 40)
   expect(terminal!.height).toBeGreaterThan(pageBox!.height - 40)
   expect(workbench!.x).toBeGreaterThan(terminal!.x)
   expect(workbench!.x + workbench!.width).toBeLessThan(terminal!.x + terminal!.width)
-  expect(workbench!.width / terminal!.width).toBeGreaterThan(0.68)
-  expect(workbench!.width / terminal!.width).toBeLessThan(0.72)
+  const compactLayout = await page.evaluate(() => window.innerWidth <= 1050)
+  if (compactLayout) {
+    expect(workbench!.width / terminal!.width).toBeGreaterThan(0.9)
+  } else {
+    expect(workbench!.width / terminal!.width).toBeGreaterThan(0.68)
+    expect(workbench!.width / terminal!.width).toBeLessThan(0.72)
+  }
   expect(workbench!.height).toBeGreaterThanOrEqual(190)
   expect(workbench!.height).toBeLessThanOrEqual(220)
   expect(Math.abs(terminal!.x + terminal!.width / 2 - (workbench!.x + workbench!.width / 2))).toBeLessThanOrEqual(3)
   const bottomGap = terminal!.y + terminal!.height - workbench!.y - workbench!.height
-  expect(bottomGap).toBeGreaterThanOrEqual(24)
-  expect(bottomGap).toBeLessThanOrEqual(48)
+  const expectedBottomGap = await page.locator('.query-floating-shell').evaluate((element) => (
+    Number.parseFloat(window.getComputedStyle(element).getPropertyValue('--query-workbench-bottom'))
+  ))
+  expect(Math.abs(bottomGap - expectedBottomGap)).toBeLessThanOrEqual(2)
   expect(select!.x).toBeGreaterThanOrEqual(workbench!.x)
   expect(select!.x + select!.width).toBeLessThanOrEqual(workbench!.x + workbench!.width)
+  expect(statusDot!.x).toBeGreaterThan(select!.x)
+  expect(statusDot!.x + statusDot!.width).toBeLessThan(select!.x + select!.width)
+  await expect(page.getByTestId('log-analysis-more')).toHaveText('更多')
   await expect(historyButton).toHaveText('历史对话')
-  expect(historyBox!.x).toBeGreaterThanOrEqual(workbench!.x)
-  expect(historyBox!.x + historyBox!.width).toBeLessThanOrEqual(workbench!.x + workbench!.width)
-  expect(autoExecute!.x).toBeGreaterThan(workbench!.x + workbench!.width / 2)
-  expect(autoExecute!.y).toBeLessThan(workbench!.y + 64)
+  expect(morePopover!.y + morePopover!.height).toBeLessThanOrEqual(moreButton!.y - 4)
+  expect(Math.abs(morePopover!.x + morePopover!.width - moreButton!.x - moreButton!.width)).toBeLessThanOrEqual(2)
+  expect(autoExecute!.x).toBeGreaterThanOrEqual(morePopover!.x)
+  expect(historyBox!.x).toBeGreaterThanOrEqual(morePopover!.x)
   const workbenchVisual = await page.getByTestId('log-analysis-workbench').evaluate((element) => {
     const style = window.getComputedStyle(element)
     return { backgroundColor: style.backgroundColor, backdropFilter: style.backdropFilter }
@@ -1279,19 +1704,46 @@ test('满幅终端内展示底部悬浮 AI 工作台且模式切换可用', asyn
   await expect(page.getByTestId('log-analysis-favorite-add')).toHaveCount(0)
 })
 
-test('AI 工作台可拖动且不会移出终端区域', async () => {
+test('AI 工作台默认宽度覆盖桌面与紧凑窗口', async () => {
+  const widthRatio = async () => {
+    const workbenchBox = await page.getByTestId('log-analysis-workbench').boundingBox()
+    const shellBox = await page.locator('.query-floating-shell').boundingBox()
+    return workbenchBox && shellBox ? workbenchBox.width / shellBox.width : 0
+  }
+
+  await setElectronViewportSize(page, desktopViewportSize)
+  await page.getByTestId('tab-log-analysis').click()
+  await expect.poll(widthRatio).toBeGreaterThan(0.6)
+  await expect.poll(widthRatio).toBeLessThan(0.7)
+
+  await page.evaluate(() => window.localStorage.removeItem('query.ai.workbenchGeometry.v3'))
+  await page.reload()
+  await expect(page.getByTestId('tab-log-analysis')).toBeVisible()
+  await setElectronViewportSize(page, compactViewportSize)
+  await page.getByTestId('tab-log-analysis').click()
+  await expect.poll(widthRatio).toBeGreaterThan(0.9)
+})
+
+test('AI 工作台可拖动、缩放并在重载后恢复', async () => {
   await page.getByTestId('tab-log-analysis').click()
   const terminal = await page.getByTestId('log-analysis-terminal').boundingBox()
   const workbench = page.getByTestId('log-analysis-workbench')
+  expect(terminal).not.toBeNull()
+  const initial = await workbench.boundingBox()
+  expect(initial).not.toBeNull()
+  if (initial!.width > terminal!.width - 100) {
+    const westResizeHandle = page.getByTestId('log-analysis-workbench-resize-w')
+    await westResizeHandle.focus()
+    for (let index = 0; index < 6; index += 1) await westResizeHandle.press('ArrowRight')
+  }
   const before = await workbench.boundingBox()
   const handle = await page.getByTestId('log-analysis-workbench-drag-area').boundingBox()
-  expect(terminal).not.toBeNull()
   expect(before).not.toBeNull()
   expect(handle).not.toBeNull()
 
   await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2)
   await page.mouse.down()
-  await page.mouse.move(handle!.x + handle!.width / 2 - 120, handle!.y + handle!.height / 2 - 80)
+  await page.mouse.move(handle!.x + handle!.width / 2 - 120, handle!.y + handle!.height / 2 - 80, { steps: 5 })
   await page.mouse.up()
 
   const after = await workbench.boundingBox()
@@ -1302,36 +1754,111 @@ test('AI 工作台可拖动且不会移出终端区域', async () => {
   expect(after!.y).toBeGreaterThanOrEqual(terminal!.y)
   expect(after!.x + after!.width).toBeLessThanOrEqual(terminal!.x + terminal!.width)
   expect(after!.y + after!.height).toBeLessThanOrEqual(terminal!.y + terminal!.height)
+
+  const resizeHandle = page.getByTestId('log-analysis-workbench-resize-se')
+  const resizeBox = await resizeHandle.boundingBox()
+  expect(resizeBox).not.toBeNull()
+  await page.mouse.move(resizeBox!.x + resizeBox!.width / 2, resizeBox!.y + resizeBox!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(resizeBox!.x + resizeBox!.width / 2 + 80, resizeBox!.y + resizeBox!.height / 2 + 20)
+  await page.mouse.up()
+
+  const resized = await workbench.boundingBox()
+  expect(resized).not.toBeNull()
+  expect(resized!.width).toBeGreaterThan(after!.width + 50)
+  expect(resized!.height).toBeGreaterThan(after!.height + 10)
+  expect(resized!.x + resized!.width).toBeLessThanOrEqual(terminal!.x + terminal!.width)
+  expect(resized!.y + resized!.height).toBeLessThanOrEqual(terminal!.y + terminal!.height)
+
+  const shrinkHandle = page.getByTestId('log-analysis-workbench-resize-e')
+  const shrinkBox = await shrinkHandle.boundingBox()
+  expect(shrinkBox).not.toBeNull()
+  await page.mouse.move(shrinkBox!.x + shrinkBox!.width / 2, shrinkBox!.y + shrinkBox!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(shrinkBox!.x + shrinkBox!.width / 2 - resized!.width + 320, shrinkBox!.y + shrinkBox!.height / 2)
+  await page.mouse.up()
+  const narrowed = await workbench.boundingBox()
+  expect(narrowed).not.toBeNull()
+  expect(narrowed!.width).toBeLessThan(400)
+  const narrowMode = await page.locator('.query-mode-switch').boundingBox()
+  const narrowActions = await page.locator('.query-floating-actions').boundingBox()
+  const narrowSelect = await page.getByTestId('log-analysis-command-select').boundingBox()
+  const narrowMore = await page.getByTestId('log-analysis-more').boundingBox()
+  const narrowEditor = await page.locator('.query-floating-editor').boundingBox()
+  expect(narrowMode).not.toBeNull()
+  expect(narrowActions).not.toBeNull()
+  expect(narrowSelect).not.toBeNull()
+  expect(narrowMore).not.toBeNull()
+  expect(narrowEditor).not.toBeNull()
+  expect(narrowMode!.y + narrowMode!.height).toBeLessThanOrEqual(narrowActions!.y)
+  expect(narrowSelect!.x + narrowSelect!.width).toBeLessThanOrEqual(narrowMore!.x)
+  expect(narrowActions!.x + narrowActions!.width).toBeLessThanOrEqual(narrowed!.x + narrowed!.width)
+  expect(narrowEditor!.y).toBeGreaterThanOrEqual(narrowActions!.y + narrowActions!.height)
+
+  const tinyShrinkBox = await shrinkHandle.boundingBox()
+  expect(tinyShrinkBox).not.toBeNull()
+  await page.mouse.move(tinyShrinkBox!.x + tinyShrinkBox!.width / 2, tinyShrinkBox!.y + tinyShrinkBox!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(tinyShrinkBox!.x + tinyShrinkBox!.width / 2 - narrowed!.width + 90, tinyShrinkBox!.y + tinyShrinkBox!.height / 2)
+  await page.mouse.up()
+  const tiny = await workbench.boundingBox()
+  const tinyEditor = await page.locator('.query-floating-editor').boundingBox()
+  expect(tiny).not.toBeNull()
+  expect(tinyEditor).not.toBeNull()
+  expect(tiny!.width).toBeLessThan(120)
+  await expect(page.locator('.query-floating-toolbar')).toHaveCSS('display', 'none')
+  expect(tinyEditor!.x).toBeGreaterThanOrEqual(tiny!.x)
+  expect(tinyEditor!.x + tinyEditor!.width).toBeLessThanOrEqual(tiny!.x + tiny!.width)
+
+  await page.reload()
+  await expect(page.getByTestId('tab-log-analysis')).toBeVisible({ timeout: 15000 })
+  await page.getByTestId('tab-log-analysis').click()
+  const restored = await page.getByTestId('log-analysis-workbench').boundingBox()
+  expect(restored).not.toBeNull()
+  expect(Math.abs(restored!.x - tiny!.x)).toBeLessThanOrEqual(3)
+  expect(Math.abs(restored!.y - tiny!.y)).toBeLessThanOrEqual(3)
+  expect(Math.abs(restored!.width - tiny!.width)).toBeLessThanOrEqual(3)
+  expect(Math.abs(restored!.height - tiny!.height)).toBeLessThanOrEqual(3)
+
+  const restoredExpandHandle = page.getByTestId('log-analysis-workbench-resize-e')
+  await restoredExpandHandle.focus()
+  for (let index = 0; index < 12; index += 1) await restoredExpandHandle.press('ArrowRight')
+
+  await openQueryMore(page)
+  await page.getByTestId('log-analysis-reset-workbench').click()
+  const reset = await workbench.boundingBox()
+  const resetTerminal = await page.getByTestId('log-analysis-terminal').boundingBox()
+  expect(reset).not.toBeNull()
+  expect(resetTerminal).not.toBeNull()
+  const resetCompactLayout = await page.evaluate(() => window.innerWidth <= 1050)
+  if (resetCompactLayout) {
+    expect(reset!.width / resetTerminal!.width).toBeGreaterThan(0.9)
+  } else {
+    expect(reset!.width / resetTerminal!.width).toBeGreaterThan(0.68)
+    expect(reset!.width / resetTerminal!.width).toBeLessThan(0.72)
+  }
+  expect(Math.abs(resetTerminal!.x + resetTerminal!.width / 2 - (reset!.x + reset!.width / 2))).toBeLessThanOrEqual(3)
+  await expect(page.getByTestId('log-analysis-more-popover')).toHaveCount(0)
+  expect(await page.evaluate(() => window.localStorage.getItem('query.ai.workbenchGeometry.v3'))).toBeNull()
 })
 
-test('会话历史默认隐藏并悬浮在底部工作台上方', async () => {
+test('历史对话默认隐藏并固定显示在屏幕中央', async () => {
   await page.getByTestId('tab-log-analysis').click()
   await expect(page.getByTestId('log-analysis-history-popover')).toHaveCount(0)
   await page.getByTestId('log-analysis-command-select').selectOption('termy')
   await page.getByTestId('log-analysis-input').fill('查询昨天的备份任务')
   await page.getByTestId('log-analysis-translate').click()
   await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
-  await page.getByTestId('log-analysis-open-history').click()
+  await openQueryHistory(page)
   await expect(page.getByTestId('log-analysis-history-popover')).toBeVisible()
   await expect(page.getByTestId('log-analysis-chat-history')).toBeVisible()
   const popover = await page.getByTestId('log-analysis-history-popover').boundingBox()
-  const terminal = await page.getByTestId('log-analysis-terminal').boundingBox()
-  const workbench = await page.getByTestId('log-analysis-workbench').boundingBox()
-  const historyButton = await page.getByTestId('log-analysis-open-history').boundingBox()
+  const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
   expect(popover).not.toBeNull()
-  expect(terminal).not.toBeNull()
-  expect(workbench).not.toBeNull()
-  expect(historyButton).not.toBeNull()
-  expect(popover!.y + popover!.height).toBeLessThan(workbench!.y)
-  const popoverGap = workbench!.y - popover!.y - popover!.height
-  expect(popoverGap).toBeGreaterThanOrEqual(8)
-  expect(popoverGap).toBeLessThanOrEqual(30)
-  expect(Math.abs(terminal!.x + terminal!.width - popover!.x - popover!.width - 32)).toBeLessThanOrEqual(6)
-  expect(popover!.width).toBeGreaterThanOrEqual(360)
-  expect(popover!.width).toBeLessThanOrEqual(430)
-  const triggerCenter = historyButton!.x + historyButton!.width / 2
-  expect(triggerCenter).toBeGreaterThan(popover!.x)
-  expect(triggerCenter).toBeLessThan(popover!.x + popover!.width)
+  expect(Math.abs(popover!.x + popover!.width / 2 - viewport.width / 2)).toBeLessThanOrEqual(3)
+  expect(Math.abs(popover!.y + popover!.height / 2 - viewport.height / 2)).toBeLessThanOrEqual(3)
+  expect(popover!.width).toBeGreaterThanOrEqual(480)
+  expect(popover!.width).toBeLessThanOrEqual(570)
   await page.getByTestId('log-analysis-close-history').click()
   await expect(page.getByTestId('log-analysis-history-popover')).toHaveCount(0)
 })
@@ -1346,9 +1873,6 @@ test('会话持久化与日志分析会话恢复', async () => {
   await page.getByTestId('tab-home').click()
   await expect(page.getByTestId('home-page')).toBeVisible()
   await page.getByTestId('command-run-termy').click()
-  await expect(page.getByTestId('home-page')).toBeVisible()
-  await expect(page.getByTestId('command-run-termy')).toContainText('继续会话', { timeout: 15000 })
-  await page.getByTestId('command-run-termy').click()
   await expect(page.getByTestId('terminal-page')).toContainText('log-analysis-e2e-marker', { timeout: 15000 })
   await page.getByTestId('terminal-back-icon').click()
   await expect(page.getByTestId('home-page')).toBeVisible()
@@ -1357,18 +1881,27 @@ test('会话持久化与日志分析会话恢复', async () => {
   await expect(page.getByTestId('log-analysis-page')).toBeVisible()
 
   await page.getByTestId('log-analysis-command-select').selectOption('termy')
-  await page.getByTestId('log-analysis-input').fill('看看当前会话里异常')
+  await page.getByTestId('log-analysis-input').fill('看看 /var/log/app.log 当前会话里异常')
   await page.getByTestId('log-analysis-translate').click()
-  await page.getByTestId('log-analysis-open-history').click()
-  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('看看当前会话里异常')
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await page.getByTestId('log-analysis-input').fill('看看 /opt/app/logs/error.log 另一个日志里的异常')
+  await page.getByTestId('log-analysis-translate').click()
+  await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('看看 /var/log/app.log 当前会话里异常')
 
   await electronApp.close()
   await launchWithHome(testHome)
 
   await page.getByTestId('tab-log-analysis').click()
   await expect(page.getByTestId('log-analysis-page')).toBeVisible()
-  await page.getByTestId('log-analysis-open-history').click()
-  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('看看当前会话里异常')
+  const rememberedLogPaths = await page.evaluate(() => {
+    const session = JSON.parse(window.localStorage.getItem('query.ai.session.v1') || '{}') as { logPathHistory?: string[] }
+    return session.logPathHistory || []
+  })
+  expect(rememberedLogPaths).toEqual(['/opt/app/logs/error.log', '/var/log/app.log'])
+  await openQueryHistory(page)
+  await expect(page.getByTestId('log-analysis-chat-history')).toContainText('看看 /var/log/app.log 当前会话里异常')
 })
 
 test('命令侧栏文案与首页可进入', async () => {
@@ -1422,7 +1955,8 @@ test('AI监控切换命令时不串会话', async () => {
   await page.getByTestId('monitoring-device-selector').click()
   await page.getByTestId('monitoring-add-command-option-termy2').click()
   await expect(page.getByTestId('monitoring-device-item-termy2')).toBeVisible()
-  await page.getByTestId('monitoring-device-row-termy2').click()
+  await page.getByTestId('monitoring-device-row-termy2').focus()
+  await page.getByTestId('monitoring-device-row-termy2').press('Enter')
   await expect(page.getByTestId('monitoring-selected-device')).toContainText('termy2')
   await expect(page.getByTestId('monitoring-switch-notice')).toContainText('termy')
 
@@ -1466,12 +2000,12 @@ test('首页支持命令列表与标签拖拽排序并持久化', async () => {
 
   const firstCommandCard = page.getByTestId('command-row-alpha')
   const secondCommandCard = page.getByTestId('command-row-bad')
-  await firstCommandCard.dragTo(secondCommandCard)
+  await dragLocator(firstCommandCard, secondCommandCard)
   await expect(page.getByTestId('global-toast')).toContainText('命令列表排序已保存')
 
   const apiTag = page.getByTestId('tag-api')
   const webTag = page.getByTestId('tag-web')
-  await apiTag.dragTo(webTag)
+  await dragLocator(apiTag, webTag)
   await expect(page.getByTestId('global-toast')).toContainText('标签排序已保存')
 
   const persisted = await page.evaluate(async () => {
@@ -1722,19 +2256,48 @@ async function setEditorContent(targetPage: Page, content: string): Promise<void
   await targetPage.keyboard.insertText(content)
 }
 
+async function dragLocator(source: Locator, target: Locator): Promise<void> {
+  const sourceBox = await source.boundingBox()
+  const targetBox = await target.boundingBox()
+  if (!sourceBox || !targetBox) throw new Error('Drag source or target is not visible')
+  const sourceX = sourceBox.x + sourceBox.width / 2
+  const sourceY = sourceBox.y + sourceBox.height / 2
+  await page.mouse.move(sourceX, sourceY)
+  await page.mouse.down()
+  await page.mouse.move(sourceX + 12, sourceY, { steps: 3 })
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 10 })
+  await page.mouse.up()
+}
+
 async function launchWithHome(homeDir: string, extraEnv: Record<string, string> = {}): Promise<void> {
-  electronApp = await electron.launch({
-    args: [appEntry],
-    env: {
-      ...process.env,
-      HOME: homeDir,
-      SHELL_MANAGE_HOME: homeDir,
-      E2E_SHELL_RC_MARKER: '',
-      ...extraEnv
+  let launchedPage: Page | undefined
+  let launchError: unknown
+  electronWindowReady = false
+  for (let attempt = 0; attempt < 2 && !launchedPage; attempt += 1) {
+    electronApp = await electron.launch({
+      args: [appEntry, '-ApplePersistenceIgnoreState', 'YES'],
+      env: {
+        ...process.env,
+        HOME: homeDir,
+        SHELL_MANAGE_HOME: homeDir,
+        E2E_SHELL_RC_MARKER: '',
+        ...extraEnv
+      }
+    })
+    try {
+      launchedPage = await electronApp.firstWindow()
+    } catch (error) {
+      launchError = error
+      console.warn(`[e2e] Electron window launch attempt ${attempt + 1} failed; forcing cleanup${attempt === 0 ? ' and retrying once' : ''}`)
+      electronApp.process().kill('SIGKILL')
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 500))
     }
-  })
-  page = await electronApp.firstWindow()
+  }
+  if (!launchedPage) throw launchError
+  page = launchedPage
+  electronWindowReady = true
   await page.waitForLoadState('domcontentloaded')
+  await setElectronViewportSize(page)
   await skipFirstRunAiGuide(page)
   await expect(page.getByTestId('home-page')).toBeVisible()
   await page.getByTestId('tag-全部').click()

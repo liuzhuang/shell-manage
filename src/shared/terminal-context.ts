@@ -3,14 +3,13 @@ const MAX_CONTEXT_CHARS = 12_000
 const MAX_LINE_CHARS = 1_000
 
 export function buildTerminalContextLines(raw: string): string[] {
-  const sanitized = raw
-    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/giu, '[PRIVATE KEY REDACTED]')
+  const sanitized = redactSensitiveText(raw)
     .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/gu, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, '')
 
   const lines = sanitized
     .split(/\r?\n/u)
-    .map((line) => redactTerminalLine(line.replace(/\r/gu, '').trim()).slice(-MAX_LINE_CHARS))
+    .map((line) => line.replace(/\r/gu, '').trim().slice(-MAX_LINE_CHARS))
     .filter(Boolean)
     .slice(-MAX_CONTEXT_LINES)
 
@@ -23,6 +22,18 @@ export function buildTerminalContextLines(raw: string): string[] {
     remaining -= clipped.length + 1
   }
   return result
+}
+
+export function redactSensitiveText(raw: string): string {
+  return raw
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/giu, '[PRIVATE KEY REDACTED]')
+    .replace(
+      /\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|lsv2_(?:pt|sk)_[A-Za-z0-9_-]{12,}|ls__[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{20,})\b/gu,
+      '[REDACTED]'
+    )
+    .split(/\r?\n/u)
+    .map(redactTerminalLine)
+    .join('\n')
 }
 
 export function redactTerminalLine(line: string): string {

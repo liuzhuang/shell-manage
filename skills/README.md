@@ -35,4 +35,4 @@ npx skills@latest add https://github.com/liuzhuang/shell-manage/tree/main/skills
 
 Skill 使用 `SKILL.md` frontmatter、按需读取的 `references/`、辅助 `scripts/` 和回归样例 `evals/`。随附脚本需要 `bash` 和 `ruby`；运行前应先确认这两个命令存在。
 
-Skill 中的产品下载清单目前仍是占位模板，不能据此提供公开下载地址。详见 [下载、安装与升级](shell-manage-assistant/references/install-and-upgrade.md)。
+GitHub Releases 是 ShellManage 公开版本和安装信息的唯一事实源。Skill 在线只使用最新正式 Release 返回的真实资产；无法在线核验时只提供发布页面，不推断版本、URL 或校验值。详见 [下载、安装与升级](shell-manage-assistant/references/install-and-upgrade.md)。

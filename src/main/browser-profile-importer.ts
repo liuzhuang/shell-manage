@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process'
 import { copyFile, lstat, mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import { buildChildProcessEnvironment } from './child-process-env'
 import type {
   BrowserProfileImportResult,
   BrowserProfileListResult,
@@ -359,7 +360,9 @@ function readChromiumDatabaseVersion(database: SqliteDatabase): number {
 async function readMacCookieKey(services: string[]): Promise<Buffer | null> {
   for (const service of services) {
     const password = await new Promise<string | null>((resolve) => {
-      execFile('/usr/bin/security', ['find-generic-password', '-w', '-s', service], (error, stdout) => {
+      execFile('/usr/bin/security', ['find-generic-password', '-w', '-s', service], {
+        env: buildChildProcessEnvironment()
+      }, (error, stdout) => {
         resolve(error ? null : String(stdout).trimEnd())
       })
     })

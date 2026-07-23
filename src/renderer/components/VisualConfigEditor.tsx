@@ -50,6 +50,8 @@ export function VisualConfigEditor({ value, onChange }: VisualConfigEditorProps)
         if (!Array.isArray(parsed.commands)) parsed.commands = []
         if (!Array.isArray(parsed.presets)) parsed.presets = []
         if (!parsed.settings) parsed.settings = { llm: { endpoint: '', apiKey: '', model: '' }, themePreset: 'coder', launchAtLogin: false, logBufferLines: 5000 }
+        if (!parsed.settings.langsmith) parsed.settings.langsmith = { tracing: true, endpoint: '', apiKey: '', project: '' }
+        else if (parsed.settings.langsmith.tracing === undefined) parsed.settings.langsmith.tracing = true
         if (!parsed.settings.themePreset) parsed.settings.themePreset = 'coder'
         if (parsed.settings.launchAtLogin !== true) parsed.settings.launchAtLogin = false
         if (!Array.isArray(parsed.settings.sshKeys)) parsed.settings.sshKeys = []
@@ -164,6 +166,9 @@ export function VisualConfigEditor({ value, onChange }: VisualConfigEditorProps)
     } else if (path.startsWith('llm.')) {
       const field = path.split('.')[1] as keyof typeof config.settings.llm
       newConfig.settings.llm = { ...newConfig.settings.llm, [field]: val }
+    } else if (path.startsWith('langsmith.')) {
+      const field = path.split('.')[1] as keyof NonNullable<typeof config.settings.langsmith>
+      newConfig.settings.langsmith = { ...newConfig.settings.langsmith, [field]: val }
     }
     updateConfig(newConfig)
   }
@@ -406,6 +411,55 @@ export function VisualConfigEditor({ value, onChange }: VisualConfigEditorProps)
                 style={compactInputStyle}
                 value={config.settings.llm.endpoint}
                 onChange={e => handleSettingsChange('llm.endpoint', e.target.value)}
+              />
+            </div>
+            <label style={{ ...settingsToggleStyle, borderTop: '1px solid var(--border-subtle)' }}>
+              <span>
+                <span style={settingsFieldTitleStyle}>LANGSMITH_TRACING</span>
+                <span style={settingsFieldHintStyle}>启用 LangSmith 追踪；仍需填写有效的 API Key。</span>
+              </span>
+              <input
+                data-testid="visual-langsmith-tracing"
+                type="checkbox"
+                checked={config.settings.langsmith?.tracing !== false}
+                onChange={(event) => handleSettingsChange('langsmith.tracing', event.target.checked)}
+              />
+            </label>
+            <div style={settingsFieldStyle}>
+              <div>
+                <label style={settingsFieldTitleStyle}>LANGSMITH_ENDPOINT</label>
+                <p style={settingsFieldHintStyle}>LangSmith API 终端节点。</p>
+              </div>
+              <input
+                data-testid="visual-langsmith-endpoint"
+                style={compactInputStyle}
+                value={config.settings.langsmith?.endpoint || ''}
+                onChange={e => handleSettingsChange('langsmith.endpoint', e.target.value)}
+              />
+            </div>
+            <div style={settingsFieldStyle}>
+              <div>
+                <label style={settingsFieldTitleStyle}>LANGSMITH_API_KEY</label>
+                <p style={settingsFieldHintStyle}>保存在本机配置文件中的 LangSmith 密钥。</p>
+              </div>
+              <input
+                data-testid="visual-langsmith-api-key"
+                type="password"
+                style={compactInputStyle}
+                value={config.settings.langsmith?.apiKey || ''}
+                onChange={e => handleSettingsChange('langsmith.apiKey', e.target.value)}
+              />
+            </div>
+            <div style={settingsFieldStyle}>
+              <div>
+                <label style={settingsFieldTitleStyle}>LANGSMITH_PROJECT</label>
+                <p style={settingsFieldHintStyle}>Trace 写入的 LangSmith 项目名称。</p>
+              </div>
+              <input
+                data-testid="visual-langsmith-project"
+                style={compactInputStyle}
+                value={config.settings.langsmith?.project || ''}
+                onChange={e => handleSettingsChange('langsmith.project', e.target.value)}
               />
             </div>
           </div>

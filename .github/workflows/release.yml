@@ -39,6 +39,25 @@ jobs:
             echo "commit=$GITHUB_SHA"
           } >> "$GITHUB_OUTPUT"
 
+  quality-gates:
+    name: Typecheck, deterministic tests and Electron E2E
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run test:skill
+      - run: npm run test:skill-agent
+      - run: xvfb-run --auto-servernum npm run test:e2e
+
   build:
     name: Build ${{ matrix.name }}
     needs: prepare
@@ -121,11 +140,61 @@ jobs:
             release/appcast-mac-*.xml
           if-no-files-found: error
 
+  query-risk-eval:
+    name: Query Agent risk evaluation
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run eval:query-risk
+        env:
+          SHELL_MANAGE_QUERY_RISK_EVAL_PROVIDER: ${{ vars.QUERY_RISK_EVAL_PROVIDER || 'openai' }}
+          SHELL_MANAGE_QUERY_RISK_EVAL_ENDPOINT: ${{ vars.QUERY_RISK_EVAL_ENDPOINT || secrets.QUERY_RISK_EVAL_ENDPOINT }}
+          SHELL_MANAGE_QUERY_RISK_EVAL_MODEL: ${{ vars.QUERY_RISK_EVAL_MODEL || secrets.QUERY_RISK_EVAL_MODEL }}
+          SHELL_MANAGE_QUERY_RISK_EVAL_API_KEY: ${{ secrets.QUERY_RISK_EVAL_API_KEY }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_ENDPOINT: ${{ vars.LANGSMITH_ENDPOINT }}
+          LANGSMITH_PROJECT: ${{ vars.LANGSMITH_PROJECT || 'shell-manage-release-evals' }}
+
+  skill-agent-eval:
+    name: ShellManage Assistant Agent evaluation
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run eval:skill-agent
+        env:
+          SHELL_MANAGE_SKILL_AGENT_EVAL_PROVIDER: ${{ vars.SKILL_AGENT_EVAL_PROVIDER || 'openai' }}
+          SHELL_MANAGE_SKILL_AGENT_EVAL_ENDPOINT: ${{ vars.SKILL_AGENT_EVAL_ENDPOINT || secrets.SKILL_AGENT_EVAL_ENDPOINT }}
+          SHELL_MANAGE_SKILL_AGENT_EVAL_MODEL: ${{ vars.SKILL_AGENT_EVAL_MODEL || secrets.SKILL_AGENT_EVAL_MODEL }}
+          SHELL_MANAGE_SKILL_AGENT_EVAL_API_KEY: ${{ secrets.SKILL_AGENT_EVAL_API_KEY }}
+          SHELL_MANAGE_SKILL_AGENT_EVAL_TIMEOUT_MS: ${{ vars.SKILL_AGENT_EVAL_TIMEOUT_MS || '60000' }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_ENDPOINT: ${{ vars.LANGSMITH_ENDPOINT }}
+          LANGSMITH_PROJECT: ${{ vars.LANGSMITH_PROJECT || 'shell-manage-release-evals' }}
+
   release:
     name: Publish GitHub Release
     needs:
       - prepare
       - build
+      - quality-gates
+      - query-risk-eval
+      - skill-agent-eval
     runs-on: ubuntu-latest
     steps:
       - name: Verify release assets

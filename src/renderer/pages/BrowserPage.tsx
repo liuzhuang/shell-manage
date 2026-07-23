@@ -145,7 +145,9 @@ export function BrowserPage({
   const [urlDraft, setUrlDraft] = useState(() => browserPageCache?.urlDraft ?? '')
   const [storedSession] = useState(readStoredBrowserSession)
   const [sessionReady, setSessionReady] = useState(false)
+  const sessionReadyRef = useRef(false)
   const [urlEditing, setUrlEditing] = useState(false)
+  const urlEditingRef = useRef(false)
   const [urlError, setUrlError] = useState('')
   const [loading, setLoading] = useState(false)
   const [profilePanelOpen, setProfilePanelOpen] = useState(false)
@@ -291,15 +293,17 @@ export function BrowserPage({
 
   useEffect(() => {
     let mounted = true
+    sessionReadyRef.current = false
     void window.api.browserSetModuleActive(true)
 
     const offCreated = window.api.onBrowserTabCreated((payload) => {
       setTabs((prev) => (prev.some((t) => t.id === payload.id) ? prev : [...prev, payload]))
+      if (sessionReadyRef.current) setActiveTabId(payload.id)
     })
     const offUpdated = window.api.onBrowserTabUpdated((payload) => {
       setTabs((prev) => prev.map((t) => (t.id === payload.id ? { ...t, ...payload } : t)))
       if (payload.id === activeTabIdRef.current) {
-        if (payload.url) setUrlDraft(payload.url)
+        if (payload.url && !urlEditingRef.current) setUrlDraft(payload.url)
         if (payload.loading !== undefined) setLoading(payload.loading)
       }
     })
@@ -334,6 +338,7 @@ export function BrowserPage({
       const tab = state.tabs.find((item) => item.id === active)
       if (tab) setUrlDraft(tab.url)
       if (active) await window.api.browserSetActiveTab(active)
+      sessionReadyRef.current = true
       setSessionReady(true)
       reportBounds()
     })
@@ -420,8 +425,8 @@ export function BrowserPage({
     return () => window.removeEventListener('keydown', onKeydown, true)
   }, [activeTabId, closeTab, createTab, selectTab, tabs])
 
-  const submitUrl = async (): Promise<boolean> => {
-    const trimmed = urlDraft.trim()
+  const submitUrl = async (input = urlDraft): Promise<boolean> => {
+    const trimmed = input.trim()
     if (!trimmed) return false
     setUrlError('')
     let tabId = activeTabId
@@ -675,12 +680,18 @@ export function BrowserPage({
               disabled={!activeTabId}
               value={urlDraft}
               onChange={(e) => setUrlDraft(e.target.value)}
-              onFocus={() => setUrlEditing(true)}
-              onBlur={() => setUrlEditing(false)}
+              onFocus={() => {
+                urlEditingRef.current = true
+                setUrlEditing(true)
+              }}
+              onBlur={() => {
+                urlEditingRef.current = false
+                setUrlEditing(false)
+              }}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter') return
                 const input = e.currentTarget
-                void submitUrl().then((success) => {
+                void submitUrl(input.value).then((success) => {
                   if (success) input.blur()
                 })
               }}

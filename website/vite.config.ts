@@ -11,15 +11,8 @@ function documentationPlugin(): Plugin {
     response: { setHeader: (name: string, value: string) => void },
     next: () => void
   ): void => {
-    const [pathname, query] = request.url?.split('?') ?? []
-    const documentRoutes: Record<string, string> = {
-      '/doc/install/': '/doc/install/index.html',
-      '/doc/shell-manage-assistant/': '/doc/shell-manage-assistant/index.html'
-    }
+    const pathname = request.url?.split('?')[0]
 
-    if (pathname && documentRoutes[pathname]) {
-      request.url = `${documentRoutes[pathname]}${query ? `?${query}` : ''}`
-    }
     if (pathname?.endsWith('.md')) {
       response.setHeader('Content-Type', 'text/markdown; charset=utf-8')
     }

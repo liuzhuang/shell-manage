@@ -9,6 +9,11 @@ export const BROWSER_PROMO_URL = 'shell-manage://browser/promo'
 export async function openBrowserPage(page: Page): Promise<void> {
   await page.getByTestId('tab-browser').click()
   await page.getByTestId('browser-page').waitFor({ state: 'visible' })
+  await page.waitForFunction(async () => {
+    const state = await window.api.browserGetState()
+    const active = state.tabs.find((tab) => tab.id === state.activeTabId)
+    return Boolean(active && active.loading === false)
+  })
 }
 
 export async function navigateBrowserUrl(page: Page, url: string): Promise<void> {
@@ -19,7 +24,7 @@ export async function navigateBrowserUrl(page: Page, url: string): Promise<void>
 }
 
 export async function readBrowserState(page: Page): Promise<{
-  tabs: Array<{ id: string; url: string; title: string }>
+  tabs: Array<{ id: string; url: string; title: string; loading?: boolean }>
   activeTabId: string | null
   moduleActive: boolean
   privacyBlurred: boolean
@@ -37,6 +42,11 @@ export async function waitForActiveTabUrl(page: Page, urlPart: string, timeoutMs
     urlPart,
     { timeout: timeoutMs }
   )
+  await page.waitForFunction(
+    (part) => (document.querySelector('[data-testid="browser-url-bar"]') as HTMLInputElement | null)?.value.includes(part),
+    urlPart,
+    { timeout: timeoutMs }
+  )
 }
 
 export async function selectBrowserTabByIndex(page: Page, index: number): Promise<void> {
@@ -51,6 +61,11 @@ export async function waitForActiveTabInternal(page: Page, pageId: string, timeo
       const active = state.tabs.find((t) => t.id === state.activeTabId)
       return active?.url === url
     },
+    expected,
+    { timeout: timeoutMs }
+  )
+  await page.waitForFunction(
+    (url) => (document.querySelector('[data-testid="browser-url-bar"]') as HTMLInputElement | null)?.value === url,
     expected,
     { timeout: timeoutMs }
   )

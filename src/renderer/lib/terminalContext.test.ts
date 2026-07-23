@@ -51,3 +51,15 @@ test('终端上下文隐藏连接 URI、会话 Cookie 与命令行凭据', () =>
     'kubectl --token=[REDACTED] get pods'
   ])
 })
+
+test('终端上下文隐藏常见平台令牌，即使令牌没有键名', () => {
+  const lines = buildTerminalContextLines([
+    'ghp_abcdefghijklmnopqrstuvwxyz1234567890',
+    'github_pat_abcdefghijklmnopqrstuvwxyz_1234567890',
+    'lsv2_pt_abcdefghijklmnopqrstuvwxyz1234567890',
+    'xoxb-' + '1234567890-abcdefghijklmnopqrstuvwxyz',
+    'AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ123456'
+  ].join('\n'))
+
+  assert.deepEqual(lines, Array.from({ length: 5 }, () => '[REDACTED]'))
+})

@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { mkdirSync, readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { FSWatcher } from 'chokidar'
 import yaml from 'js-yaml'
@@ -16,13 +16,17 @@ export class ConfigLoader {
   ensureConfigFile(): void {
     if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true })
     if (!existsSync(CONFIG_PATH)) {
-      if (existsSync(DEFAULT_CONFIG_PATH)) copyFileSync(DEFAULT_CONFIG_PATH, CONFIG_PATH)
+      if (existsSync(DEFAULT_CONFIG_PATH)) {
+        writeFileSync(CONFIG_PATH, readFileSync(DEFAULT_CONFIG_PATH), { mode: 0o600 })
+      }
       else
         writeFileSync(
           CONFIG_PATH,
-          'commands: []\npresets: []\ndashboard:\n  version: 1\n  activeTabId: ops-main\n  tabs: []\nsettings:\n  llm:\n    provider: "openai"\n    endpoint: ""\n    apiKey: ""\n    model: ""\n  themePreset: coder\n  launchAtLogin: false\n  logBufferLines: 5000\n'
+          'commands: []\npresets: []\ndashboard:\n  version: 1\n  activeTabId: ops-main\n  tabs: []\nsettings:\n  llm:\n    provider: "openai"\n    endpoint: ""\n    apiKey: ""\n    model: ""\n  themePreset: coder\n  launchAtLogin: false\n  logBufferLines: 5000\n',
+          { mode: 0o600 }
         )
     }
+    chmodSync(CONFIG_PATH, 0o600)
   }
 
   readRaw(): string {
@@ -107,7 +111,8 @@ export class ConfigLoader {
     const result = this.validate(raw)
     if (!result.valid) throw new Error(result.error)
     mkdirSync(dirname(CONFIG_PATH), { recursive: true })
-    writeFileSync(CONFIG_PATH, raw, 'utf-8')
+    writeFileSync(CONFIG_PATH, raw, { encoding: 'utf-8', mode: 0o600 })
+    chmodSync(CONFIG_PATH, 0o600)
   }
 
   getConfigPath(): string {
@@ -286,14 +291,14 @@ function normalizeThemePreset(value: unknown): ThemePreset {
 function normalizeLangsmithConfig(config: AppConfig['settings']['langsmith']): AppConfig['settings']['langsmith'] {
   if (!config || typeof config !== 'object') {
     return {
-      tracingV2: false,
+      tracing: true,
       endpoint: '',
       apiKey: '',
       project: ''
     }
   }
   return {
-    tracingV2: Boolean(config.tracingV2),
+    tracing: config.tracing !== false,
     endpoint: typeof config.endpoint === 'string' ? config.endpoint : '',
     apiKey: typeof config.apiKey === 'string' ? config.apiKey : '',
     project: typeof config.project === 'string' ? config.project : ''

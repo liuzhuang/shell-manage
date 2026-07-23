@@ -2,14 +2,13 @@
 # resolve-knowledge-root.sh — locate bundled knowledge root and optionally verify integrity
 set -euo pipefail
 
-MARKER="distribution-manifest.yaml"
+MARKER="install-and-upgrade.md"
 OUTPUT_JSON=0
 VERIFY=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 REQUIRED_FILES=(
-  "distribution-manifest.yaml"
   "install-and-upgrade.md"
   "config-schema.md"
   "config-workflow.md"

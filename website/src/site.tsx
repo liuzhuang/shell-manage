@@ -6,6 +6,7 @@ const downloadUrl = 'https://github.com/liuzhuang/shell-manage/releases'
 const lensWidth = 280
 const lensHeight = 180
 const lensZoom = 2
+const lensPointerOffset = 48
 
 interface ScreenshotProps {
   id: ScreenshotId
@@ -55,8 +56,8 @@ function Screenshot({ id, priority = false, testId }: ScreenshotProps): ReactNod
     const height = Math.min(lensHeight, imageHeight)
     const x = Math.min(Math.max(event.clientX - rect.left - event.currentTarget.clientLeft, 0), imageWidth)
     const y = Math.min(Math.max(event.clientY - rect.top - event.currentTarget.clientTop, 0), imageHeight)
-    const left = Math.min(x, imageWidth - width)
-    const top = Math.min(y, imageHeight - height)
+    const left = Math.min(Math.max(x - lensPointerOffset, 0), imageWidth - width)
+    const top = Math.min(Math.max(y - lensPointerOffset, 0), imageHeight - height)
     const lens = lensRef.current
 
     lens.hidden = false
@@ -65,7 +66,7 @@ function Screenshot({ id, priority = false, testId }: ScreenshotProps): ReactNod
     lens.style.transform = `translate3d(${left}px, ${top}px, 0)`
     lens.style.backgroundImage = `url("${screenshot.src}")`
     lens.style.backgroundSize = `${imageWidth * lensZoom}px ${imageHeight * lensZoom}px`
-    lens.style.backgroundPosition = `${-x * lensZoom}px ${-y * lensZoom}px`
+    lens.style.backgroundPosition = `${x - left - x * lensZoom}px ${y - top - y * lensZoom}px`
   }
 
   const hideLens = (): void => {
@@ -151,7 +152,7 @@ function SiteHeader(): ReactNode {
           </a>
           <nav className="site-nav" aria-label="主要导航">
             <a href="#features">功能</a>
-            <a href="#getting-started">上手</a>
+            <a href="#getting-started">安装</a>
             <a href="#terms">术语</a>
           </nav>
           <DownloadLink compact />
@@ -162,24 +163,26 @@ function SiteHeader(): ReactNode {
 }
 
 function GettingStarted(): ReactNode {
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle')
+  const [copyStatus, setCopyStatus] = useState<'install' | 'import' | 'install-error' | 'import-error' | null>(null)
+  const installGuideUrl = new URL('/doc/install.md', window.location.origin).href
   const guideUrl = new URL('/doc/shell-manage-assistant.md', window.location.origin).href
+  const installInstruction = `请阅读 ${installGuideUrl}，按照文档下载并安装 ShellManage。`
   const importInstruction =
     `请阅读 ${guideUrl}，按照文档分析当前项目，并将验证通过的启动命令导入 ShellManage。`
 
-  const copyImportInstruction = async (): Promise<void> => {
+  const copyInstruction = async (instruction: string, target: 'install' | 'import'): Promise<void> => {
     try {
-      await navigator.clipboard.writeText(importInstruction)
-      setCopyStatus('copied')
+      await navigator.clipboard.writeText(instruction)
+      setCopyStatus(target)
     } catch {
-      setCopyStatus('error')
+      setCopyStatus(`${target}-error`)
     }
   }
 
   return (
     <section className="skill-section" id="getting-started" data-testid="getting-started">
       <div className="section-heading">
-        <p className="eyebrow">三步上手</p>
+        <p className="eyebrow">三步上手安装使用</p>
         <h2>安装 ShellManage，然后让 AI 导入命令。</h2>
         <p>
           软件安装完成后，把导入指令发送给当前项目中的 Agent。命令写入配置后即可回到 ShellManage 启动。
@@ -189,46 +192,56 @@ function GettingStarted(): ReactNode {
         <article className="onboarding-step">
           <div className="onboarding-step__heading">
             <span>01</span>
-            <h3>下载并安装</h3>
+            <h3>Agent 一键接入</h3>
           </div>
-          <p>下载 macOS 版本，将 ShellManage 安装到应用程序目录。</p>
+          <p>请将以下提示词发送到 Agent 的对话窗口，根据引导完成安装。</p>
+          <div className="import-instruction" data-testid="install-instruction">
+            请阅读{' '}
+            <a href={installGuideUrl} target="_blank" rel="noreferrer">{installGuideUrl}</a>
+            ，按照文档下载并安装 ShellManage。
+          </div>
           <div className="onboarding-step__actions">
-            <DownloadLink />
-            <a href="/doc/install/" data-testid="install-guide-link">查看安装说明</a>
+            <button
+              className="button"
+              type="button"
+              data-testid="install-instruction-copy"
+              onClick={() => void copyInstruction(installInstruction, 'install')}
+            >
+              {copyStatus === 'install' ? '已复制，请发送给 Agent' : '复制提示词'}
+            </button>
+            <a href={downloadUrl} data-testid="download-button">手动下载安装</a>
           </div>
+          <p className="copy-status" role="status" aria-live="polite">
+            {copyStatus === 'install-error' ? '复制失败，请手动选择并复制提示词。' : ''}
+          </p>
         </article>
         <article className="onboarding-step">
           <div className="onboarding-step__heading">
             <span>02</span>
-            <h3>发送导入指令</h3>
+            <h3>添加命令</h3>
           </div>
-          <p>在当前项目的 Agent 对话窗口发送下面这句话。</p>
+          <p>请讲以下提示词发送到你的 Vibe Coding Agent 对话窗口</p>
           <div className="import-instruction" data-testid="import-instruction">
-            {importInstruction}
+            请阅读{' '}
+            <a href={guideUrl} target="_blank" rel="noreferrer">{guideUrl}</a>
+            ，按照文档分析当前项目，并将验证通过的启动命令导入 ShellManage。
           </div>
           <button
             className="button"
             type="button"
             data-testid="import-instruction-copy"
-            onClick={() => void copyImportInstruction()}
+            onClick={() => void copyInstruction(importInstruction, 'import')}
           >
-            {copyStatus === 'copied' ? '已复制，请发送给 Agent' : '复制导入指令'}
+            {copyStatus === 'import' ? '已复制，请发送给 Agent' : '复制提示词'}
           </button>
-          <a
-            className="onboarding-step__guide-link"
-            href="/doc/shell-manage-assistant/"
-            data-testid="assistant-guide-link"
-          >
-            查看导入说明
-          </a>
           <p className="copy-status" role="status" aria-live="polite">
-            {copyStatus === 'error' ? '复制失败，请手动选择并复制导入指令。' : ''}
+            {copyStatus === 'import-error' ? '复制失败，请手动选择并复制提示词。' : ''}
           </p>
         </article>
         <article className="onboarding-step">
           <div className="onboarding-step__heading">
             <span>03</span>
-            <h3>启动新命令</h3>
+            <h3>点击启动新命令</h3>
           </div>
           <p>回到 ShellManage，找到新命令并启动。看到实时日志后，首次上手即完成。</p>
         </article>
@@ -241,10 +254,10 @@ function Hero(): ReactNode {
   return (
     <section className="hero" data-testid="hero">
       <div className="hero__copy">
-        <p className="eyebrow">为 Vibe Coding 构建者准备的 macOS 应用</p>
-        <h1>不用记命令，也不用重复输入。</h1>
+        <p className="eyebrow">For Vibe Coding</p>
+        <h1>好记性不如烂笔头</h1>
         <p className="hero__lead">
-          保存项目启动命令、SSH 隧道和其他重复操作，需要时直接运行，并在同一处查看状态和日志。
+          一次保存（启动命令、SSH 隧道），多次运行，实时查看状态和日志。
         </p>
         <DownloadLink />
       </div>
@@ -276,7 +289,7 @@ function DevelopmentWorkspace(): ReactNode {
   return (
     <section className="section section--tinted" data-testid="development-workspace">
       <div className="section-heading">
-        <p className="eyebrow">开发现场</p>
+        <p className="eyebrow">开发环境</p>
         <h2>项目启动后，不必再切换多个工具。</h2>
       </div>
       <Feature
@@ -295,7 +308,7 @@ function DevelopmentWorkspace(): ReactNode {
         screenshot="ai-settings"
       />
       <Feature
-        title="AI 查询"
+        title="AI 查日志"
         description="直接询问服务器状态，由 AI 生成查询命令并返回结果。"
         screenshot="ai-query"
       />
@@ -351,10 +364,7 @@ function TermGuide(): ReactNode {
 function DownloadSection(): ReactNode {
   return (
     <section className="download-section" id="download">
-      <div>
-        <p className="eyebrow">ShellManage for macOS</p>
-        <h2>把重复操作留给 ShellManage。</h2>
-      </div>
+      <h2>把重复操作留给 ShellManage。</h2>
       <DownloadLink />
     </section>
   )

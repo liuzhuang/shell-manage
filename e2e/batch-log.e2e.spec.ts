@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import yaml from 'js-yaml'
+import { setElectronViewportSize } from './helpers/electron-viewport'
 import { skipFirstRunAiGuide } from './helpers/home'
 
 const appEntry = join(process.cwd(), 'dist/main/index.js')
@@ -81,7 +82,7 @@ test.beforeEach(async () => {
   await mkdir(configDir, { recursive: true })
   await writeFile(join(configDir, 'config.yaml'), testConfigYaml, 'utf-8')
   electronApp = await electron.launch({
-    args: [appEntry],
+    args: [appEntry, '-ApplePersistenceIgnoreState', 'YES'],
     env: {
       ...process.env,
       HOME: testHome,
@@ -90,6 +91,7 @@ test.beforeEach(async () => {
   })
   page = await electronApp.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  await setElectronViewportSize(page)
   await skipFirstRunAiGuide(page)
   await expect(page.getByTestId('home-page')).toBeVisible()
   await resetHomeTag(page)
@@ -456,7 +458,7 @@ test.describe('日志看板跳转详情', () => {
 
 async function launchWithHome(homeDir: string): Promise<void> {
   electronApp = await electron.launch({
-    args: [appEntry],
+    args: [appEntry, '-ApplePersistenceIgnoreState', 'YES'],
     env: {
       ...process.env,
       HOME: homeDir,
@@ -465,6 +467,7 @@ async function launchWithHome(homeDir: string): Promise<void> {
   })
   page = await electronApp.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  await setElectronViewportSize(page)
   await skipFirstRunAiGuide(page)
   await expect(page.getByTestId('home-page')).toBeVisible()
   await resetHomeTag(page)

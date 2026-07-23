@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import type { CommandConfig, ProcessOutputPayload, ProcessStatusPayload } from '../shared/types'
 import { terminateProcessTreeWithEscalation } from './process-tree'
 import { resolveServiceArgs, resolveShellExecutable } from './shell-runtime'
+import { buildChildProcessEnvironment } from './child-process-env'
 
 interface ProcessRecord {
   child?: ChildProcess
@@ -115,7 +116,7 @@ export class ProcessManager {
     const shellExec = resolveShellExecutable()
     const shellArgs = resolveServiceArgs(shellExec, config.command)
     const child = spawn(shellExec, shellArgs, {
-      env: process.env,
+      env: buildChildProcessEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32'
     })
@@ -420,7 +421,10 @@ export class ProcessManager {
 
   private async findListeningPidsByPort(port: number): Promise<number[]> {
     try {
-      const { stdout } = await this.execAsync(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null || true`)
+      const { stdout } = await this.execAsync(
+        `lsof -nP -iTCP:${port} -sTCP:LISTEN -t 2>/dev/null || true`,
+        { env: buildChildProcessEnvironment() }
+      )
       const pidSet = new Set<number>()
       for (const line of stdout.split(/\r?\n/)) {
         const value = Number.parseInt(line.trim(), 10)
@@ -465,7 +469,10 @@ export class ProcessManager {
     if (!Number.isFinite(pid) || pid <= 0) return undefined
     if (cache.has(pid)) return cache.get(pid)
     try {
-      const { stdout } = await this.execAsync(`ps -p ${pid} -o ppid=,comm=,command= 2>/dev/null || true`)
+      const { stdout } = await this.execAsync(
+        `ps -p ${pid} -o ppid=,comm=,command= 2>/dev/null || true`,
+        { env: buildChildProcessEnvironment() }
+      )
       const line = stdout.trim()
       if (!line) {
         cache.set(pid, undefined)
@@ -591,7 +598,9 @@ export class ProcessManager {
 
   private async findPidsByCwd(cwd: string): Promise<number[]> {
     const escaped = JSON.stringify(cwd)
-    const { stdout } = await this.execAsync(`pgrep -fi -- ${escaped} 2>/dev/null || true`)
+    const { stdout } = await this.execAsync(`pgrep -fi -- ${escaped} 2>/dev/null || true`, {
+      env: buildChildProcessEnvironment()
+    })
     return stdout
       .split(/\r?\n/)
       .map((line) => Number.parseInt(line.trim(), 10))
@@ -600,7 +609,9 @@ export class ProcessManager {
 
   private async findAllListeningPids(): Promise<number[]> {
     try {
-      const { stdout } = await this.execAsync('lsof -nP -iTCP -sTCP:LISTEN -t 2>/dev/null || true')
+      const { stdout } = await this.execAsync('lsof -nP -iTCP -sTCP:LISTEN -t 2>/dev/null || true', {
+        env: buildChildProcessEnvironment()
+      })
       return stdout
         .split(/\r?\n/)
         .map((line) => Number.parseInt(line.trim(), 10))
@@ -612,7 +623,10 @@ export class ProcessManager {
 
   private async findListeningPortsByPid(pid: number): Promise<number[]> {
     try {
-      const { stdout } = await this.execAsync(`lsof -nP -a -p ${pid} -iTCP -sTCP:LISTEN 2>/dev/null || true`)
+      const { stdout } = await this.execAsync(
+        `lsof -nP -a -p ${pid} -iTCP -sTCP:LISTEN 2>/dev/null || true`,
+        { env: buildChildProcessEnvironment() }
+      )
       const portSet = new Set<number>()
       for (const line of stdout.split(/\r?\n/)) {
         const matched = line.match(/:(\d{1,5})\s+\(LISTEN\)\s*$/)
@@ -628,7 +642,9 @@ export class ProcessManager {
 
   private async getProcessCwdByPid(pid: number): Promise<string | undefined> {
     try {
-      const { stdout } = await this.execAsync(`lsof -a -d cwd -p ${pid} 2>/dev/null || true`)
+      const { stdout } = await this.execAsync(`lsof -a -d cwd -p ${pid} 2>/dev/null || true`, {
+        env: buildChildProcessEnvironment()
+      })
       for (const line of stdout.split(/\r?\n/)) {
         const trimmed = line.trim()
         if (!trimmed) continue

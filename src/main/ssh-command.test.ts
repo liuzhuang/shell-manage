@@ -1,10 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { injectSshIdentity, prepareManagedSshCommand, resolveCommandWithSshKey } from './ssh-command'
 import type { SshKeyConfig } from '../shared/types'
+
+const testHome = mkdtempSync(join(tmpdir(), 'shell-manage-ssh-test-'))
+process.env.SHELL_MANAGE_HOME = testHome
+const { injectSshIdentity, prepareManagedSshCommand, resolveCommandWithSshKey } = await import('./ssh-command')
 
 test('injectSshIdentity adds -i for ssh commands', () => {
   const result = injectSshIdentity('ssh root@1.2.3.4', '/tmp/prod.pem')
@@ -17,9 +20,7 @@ test('injectSshIdentity replaces existing -i path', () => {
 })
 
 test('resolveCommandWithSshKey resolves configured key file', () => {
-  const home = join(tmpdir(), `shell-manage-ssh-test-${Date.now()}`)
-  process.env.SHELL_MANAGE_HOME = home
-  const keysDir = join(home, '.shell-manage', 'keys')
+  const keysDir = join(testHome, '.shell-manage', 'keys')
   mkdirSync(keysDir, { recursive: true })
   writeFileSync(join(keysDir, 'prod.pem'), '-----BEGIN OPENSSH PRIVATE KEY-----\ntest\n-----END OPENSSH PRIVATE KEY-----\n')
 
@@ -27,8 +28,6 @@ test('resolveCommandWithSshKey resolves configured key file', () => {
   const result = resolveCommandWithSshKey('ssh root@1.2.3.4', 'prod', keys)
   assert.match(result, /^ssh -i "/)
   assert.match(result, /prod\.pem" root@1\.2\.3\.4$/)
-
-  delete process.env.SHELL_MANAGE_HOME
 })
 
 test('resolveCommandWithSshKey leaves non-ssh commands unchanged', () => {

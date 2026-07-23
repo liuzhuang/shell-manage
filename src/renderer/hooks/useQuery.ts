@@ -1,13 +1,27 @@
-import { useEffect, useState } from 'react'
-import type { QueryAiHistoryItem, QueryAiResponse, QueryAiStats, QueryAiStreamPayload } from '../../shared/types'
+import { useEffect, useRef, useState } from 'react'
+import type {
+  QueryAgentPhase,
+  QueryAgentToolTraceRequest,
+  QueryAiHistoryItem,
+  QueryAiProgressPayload,
+  QueryAiResponse,
+  QueryAiStats
+} from '../../shared/types'
+import {
+  runQueryAgent,
+  type QueryAgentExecutionResult,
+  type QueryAgentReviewRequest
+} from '../lib/query-agent-runner'
 import { buildTerminalContextLines, redactTerminalLine } from '../lib/terminalContext'
 
 interface TranslateContext {
   selectedCommand?: string
   terminalSessionId?: string
   terminalInstanceId?: string
-  targetLogPath?: string
   sessionLogs: string[]
+  executeCommand?: (response: QueryAiResponse) => Promise<QueryAgentExecutionResult>
+  reviewCommand?: (request: QueryAgentReviewRequest) => Promise<QueryAgentExecutionResult>
+  shouldContinue?: () => boolean
 }
 
 interface ExecuteContext {
@@ -48,7 +62,9 @@ export function useQueryState() {
   const [chatHistory, setChatHistory] = useState<Array<QueryAiHistoryItem & { at: number }>>(persisted.chatHistory)
   const [streamingText, setStreamingText] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
-  const [currentRequestId, setCurrentRequestId] = useState('')
+  const [agentPhase, setAgentPhase] = useState<QueryAgentPhase | null>(null)
+  const currentRequestIdRef = useRef('')
+  const currentRunIdRef = useRef('')
   const [lastAiStats, setLastAiStats] = useState<QueryAiStats | null>(null)
   const [executionSummary, setExecutionSummary] = useState('')
   const [isSummarizing, setIsSummarizing] = useState(false)
@@ -66,31 +82,41 @@ export function useQueryState() {
     })
   }
 
+  function updateCommandExecution(
+    command: string,
+    status: NonNullable<QueryAiHistoryItem['execution']>['status'],
+    message?: string
+  ) {
+    setChatHistory((prev) => {
+      let targetIndex = -1
+      for (let index = prev.length - 1; index >= 0; index -= 1) {
+        const execution = prev[index].execution
+        if (execution?.command !== command || !['pending', 'running', 'waiting_for_review'].includes(execution.status)) continue
+        targetIndex = index
+        break
+      }
+      if (targetIndex < 0) return prev
+      const next = prev.map((item, index) => (
+        index === targetIndex ? { ...item, execution: { command, status, message } } : item
+      ))
+      persistSnapshot({ chatHistory: next })
+      return next
+    })
+  }
+
   useEffect(() => {
-    const off = window.api.onQueryAiStream((payload: QueryAiStreamPayload) => {
-      if (!currentRequestId || payload.requestId !== currentRequestId) return
-      if (payload.phase === 'start') {
-        setStreamingText('')
-        setIsStreaming(true)
-        return
-      }
-      if (payload.phase === 'chunk') {
-        setStreamingText((prev) => `${prev}${payload.text || ''}`)
-        return
-      }
-      if (payload.phase === 'error') {
-        setIsStreaming(false)
-        return
-      }
-      if (payload.phase === 'end') {
-        setIsStreaming(false)
+    const off = window.api.onQueryAiProgress((payload: QueryAiProgressPayload) => {
+      if (!currentRequestIdRef.current || payload.requestId !== currentRequestIdRef.current) return
+      setAgentPhase(payload.phase)
+      if (payload.phase === 'completed') {
         if (payload.stats) setLastAiStats(payload.stats)
+        return
       }
     })
     return () => {
       void off?.()
     }
-  }, [currentRequestId])
+  }, [])
 
   useEffect(() => {
     savePersistedSession({
@@ -106,46 +132,242 @@ export function useQueryState() {
   async function translate(context: TranslateContext): Promise<QueryAiResponse | undefined> {
     const input = queryInput.trim()
     if (!input || isStreaming) return undefined
-    const requestId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    setCurrentRequestId(requestId)
+    const runId = `ai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const runStartedAt = Date.now()
+    currentRunIdRef.current = runId
     setIsStreaming(true)
+    setAgentPhase('generating_query')
     setStreamingText('')
     setChatHistory((prev) => {
       const next = [...prev, { role: 'user' as const, content: input, at: Date.now() }]
       persistSnapshot({ chatHistory: next })
       return next
     })
-    const history = chatHistory.map<QueryAiHistoryItem>((item) => ({ role: item.role, content: item.content }))
+    const rememberedLogPaths = collectRememberedLogPaths(input, chatHistory, logPathHistory)
+    if (rememberedLogPaths.join('\n') !== logPathHistory.join('\n')) setLogPathHistory(rememberedLogPaths)
+    let modelHistory: QueryAiHistoryItem[] = []
     const sessionLogContext = context.sessionLogs.slice(-120)
+    let lastResult: QueryAiResponse | undefined
+    let aggregateStats: QueryAiStats | null = null
+    let requestIndex = 0
+    let executedCommandCount = 0
+    let pendingReviewMessage = ''
+    let finalPhase: Extract<QueryAgentPhase, 'completed' | 'waiting_for_review' | 'cancelled' | 'failed'> = 'failed'
+    let finalError: string | undefined
+    const shouldContinue = () => (
+      currentRunIdRef.current === runId && (context.shouldContinue?.() ?? true)
+    )
     try {
-      const result = await window.api.queryAiChat({
-        requestId,
-        input,
-        history,
-        selectedCommand: context.selectedCommand,
-        terminalSessionId: context.terminalSessionId,
-        terminalInstanceId: context.terminalInstanceId,
-        targetLogPath: context.targetLogPath?.trim() || undefined,
-        sessionLogs: sessionLogContext,
-        queryOutputLines: []
+      const runResult = await runQueryAgent({
+        shouldContinue,
+        onPhase: (phase) => {
+          if (!shouldContinue()) return
+          setAgentPhase(phase)
+          if (phase === 'waiting_for_review' && lastResult?.action.type === 'command') {
+            updateCommandExecution(
+              lastResult.action.command || '',
+              'waiting_for_review',
+              pendingReviewMessage || lastResult.action.riskReason || '命令需要人工确认。'
+            )
+          }
+        },
+        requestStep: async ({ outputLines, forceReply }) => {
+          requestIndex += 1
+          const requestId = `${runId}-${requestIndex}`
+          currentRequestIdRef.current = requestId
+          const stepInput = requestIndex === 1
+            ? input
+            : forceReply
+              ? `本次原始请求：${input}\n请仅根据已有命令输出给出最终结论；已有结果足够或命令重复，不得继续生成命令。`
+              : `本次原始请求：${input}\n请分析最新命令输出，并继续处理本次请求。`
+          const result = await window.api.queryAiChat({
+            requestId,
+            agentRunId: runId,
+            stepIndex: requestIndex,
+            input: stepInput,
+            history: modelHistory,
+            selectedCommand: context.selectedCommand,
+            terminalSessionId: context.terminalSessionId,
+            terminalInstanceId: context.terminalInstanceId,
+            rememberedLogPaths,
+            sessionLogs: sessionLogContext,
+            queryOutputLines: buildTerminalContextLines(outputLines.join('\n')),
+            forceReply
+          })
+          if (!shouldContinue()) throw createQueryAgentCancellationError()
+          lastResult = result
+          aggregateStats = mergeQueryAiStats(aggregateStats, result.stats)
+          const answer = result.answer.trim()
+          const generatedCommand = result.action.type === 'command' ? (result.action.command || '').trim() : ''
+          if (generatedCommand) setCommandInput(generatedCommand)
+          setStreamingText(answer)
+          setChatHistory((prev) => {
+            const next = [
+              ...prev,
+              {
+                role: 'assistant' as const,
+                content: answer,
+                action: result.action,
+                execution: generatedCommand
+                  ? { command: generatedCommand, status: 'pending' as const }
+                  : undefined,
+                at: Date.now()
+              }
+            ]
+            persistSnapshot({
+              chatHistory: next,
+              ...(generatedCommand ? { commandInput: generatedCommand } : {})
+            })
+            return next
+          })
+          modelHistory = [
+            ...modelHistory,
+            { role: 'user', content: stepInput },
+            { role: 'assistant', content: answer, action: result.action }
+          ]
+          if (result.action.type === 'command') return { type: 'command', command: generatedCommand }
+          return { type: result.action.type, message: answer }
+        },
+        executeCommand: async (command) => {
+          const toolStartedAt = Date.now()
+          if (!lastResult || lastResult.action.type !== 'command' || lastResult.action.command?.trim() !== command.trim()) {
+            const message = 'Agent 执行步骤与模型响应不一致。'
+            await recordQueryAgentToolTrace({
+              agentRunId: runId,
+              stepIndex: requestIndex,
+              command,
+              output: message,
+              status: 'failed',
+              durationMs: Date.now() - toolStartedAt
+            })
+            return { status: 'failed', message }
+          }
+          updateCommandExecution(command, 'running')
+          let execution: QueryAgentExecutionResult
+          try {
+            execution = context.executeCommand
+              ? await context.executeCommand(lastResult)
+              : { status: 'waiting_for_review', message: '命令已保留并等待人工执行。' }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            updateCommandExecution(command, 'failed', message)
+            await recordQueryAgentToolTrace({
+              agentRunId: runId,
+              stepIndex: requestIndex,
+              command,
+              output: message,
+              status: 'failed',
+              durationMs: Date.now() - toolStartedAt
+            })
+            throw error
+          }
+          if (execution.status === 'waiting_for_review') {
+            pendingReviewMessage = execution.message || ''
+            if (context.reviewCommand) return execution
+          }
+          updateCommandExecution(command, execution.status, execution.status === 'completed' ? undefined : execution.message)
+          await recordQueryAgentToolTrace({
+            agentRunId: runId,
+            stepIndex: requestIndex,
+            command,
+            output: execution.status === 'completed'
+              ? execution.outputLines.join('\n')
+              : execution.message || '',
+            status: execution.status,
+            durationMs: Date.now() - toolStartedAt
+          })
+          if (execution.status === 'completed') executedCommandCount += 1
+          return execution
+        },
+        reviewCommand: context.reviewCommand
+          ? async (request) => {
+              const toolStartedAt = Date.now()
+              let execution: QueryAgentExecutionResult
+              try {
+                const reviewedExecution = context.reviewCommand!(request)
+                execution = await reviewedExecution
+              } catch (error) {
+                execution = { status: 'failed', message: error instanceof Error ? error.message : String(error) }
+              }
+              updateCommandExecution(
+                request.command,
+                execution.status,
+                execution.status === 'completed' ? undefined : execution.message
+              )
+              await recordQueryAgentToolTrace({
+                agentRunId: runId,
+                stepIndex: requestIndex,
+                command: request.command,
+                output: execution.status === 'completed'
+                  ? execution.outputLines.join('\n')
+                  : execution.message || '',
+                status: execution.status,
+                durationMs: Date.now() - toolStartedAt
+              })
+              return execution
+            }
+          : undefined,
+        onDuplicateCommand: (command) => {
+          updateCommandExecution(command, 'cancelled', '与本轮已执行命令重复，已跳过并改为总结现有结果。')
+        }
       })
-      const answer = result.answer.trim()
-      const generatedCommand = result.action.type === 'command' ? (result.action.command || '').trim() : ''
-      if (generatedCommand) setCommandInput(generatedCommand)
-      setStreamingText(answer)
-      setChatHistory((prev) => {
-        const next = [...prev, { role: 'assistant' as const, content: answer, action: result.action, at: Date.now() }]
-        persistSnapshot({
-          chatHistory: next,
-          ...(generatedCommand ? { commandInput: generatedCommand } : {})
+      if (!shouldContinue()) {
+        finalPhase = 'cancelled'
+        return lastResult
+      }
+      finalPhase = runResult.phase
+      executedCommandCount = runResult.executedCommandCount
+      setAgentPhase(runResult.phase)
+      if (aggregateStats) setLastAiStats(aggregateStats)
+      if (runResult.phase === 'failed' && runResult.executedCommandCount === 3 && runResult.step?.type === 'command') {
+        const message = '已达到三条命令执行上限，模型仍请求继续执行；本轮已停止。'
+        setStreamingText(message)
+        setChatHistory((prev) => {
+          const next = [...prev, { role: 'assistant' as const, content: message, at: Date.now() }]
+          persistSnapshot({ chatHistory: next })
+          return next
         })
-        return next
-      })
-      setLastAiStats(result.stats)
-      return result
+      }
+      return lastResult
+    } catch (error) {
+      if (currentRunIdRef.current !== runId) {
+        finalPhase = 'cancelled'
+        return lastResult
+      }
+      finalPhase = 'failed'
+      finalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      setAgentPhase('failed')
+      throw error
     } finally {
-      setIsStreaming(false)
+      if (currentRunIdRef.current === runId) {
+        currentRunIdRef.current = ''
+        currentRequestIdRef.current = ''
+        setIsStreaming(false)
+      }
+      try {
+        await window.api.queryAgentTraceFinish({
+          agentRunId: runId,
+          phase: finalPhase,
+          executedCommandCount,
+          stepCount: requestIndex,
+          durationMs: Date.now() - runStartedAt,
+          stats: aggregateStats || undefined,
+          finalAnswer: lastResult?.answer,
+          error: finalError
+        })
+      } catch {
+        // 追踪服务不可用不能影响 Query Agent 的主流程。
+      }
     }
+  }
+
+  async function cancelTranslation(): Promise<void> {
+    const requestId = currentRequestIdRef.current
+    currentRunIdRef.current = ''
+    currentRequestIdRef.current = ''
+    setAgentPhase('cancelled')
+    setIsStreaming(false)
+    if (requestId) await window.api.queryCancel(requestId)
   }
 
   function fillCommandFromFavorite(text: string) {
@@ -286,6 +508,7 @@ export function useQueryState() {
     chatHistory,
     streamingText,
     isStreaming,
+    agentPhase,
     lastAiStats,
     executionSummary,
     isSummarizing,
@@ -300,6 +523,7 @@ export function useQueryState() {
     removeFavoriteCommand,
     executionEvents,
     translate,
+    cancelTranslation,
     execute,
     retryAnalyzeVisibleLogs,
     retryAnalyzeExecutionEvent
@@ -367,10 +591,28 @@ function loadLastLogPath(): string {
   }
 }
 
+function collectRememberedLogPaths(
+  input: string,
+  history: Array<QueryAiHistoryItem & { at: number }>,
+  existing: string[]
+): string[] {
+  // ponytail: remembers conventional shell paths; add shell-token parsing if quoted paths with spaces become common.
+  const paths = [
+    ...extractAbsolutePaths(input),
+    ...history.slice().reverse().flatMap((item) => item.role === 'user' ? extractAbsolutePaths(item.content) : []),
+    ...existing
+  ]
+  return Array.from(new Set(paths)).slice(0, MAX_LOG_PATH_HISTORY)
+}
+
+function extractAbsolutePaths(text: string): string[] {
+  return text.match(/(?<![:/])\/[A-Za-z0-9._~@%+=:,/-]+/gu) || []
+}
+
 /**
  * 轮询并等待输出趋于稳定，再将新增输出交给 AI 分析。
  */
-async function pollForExecutionOutput(commandName: string, beforeText: string, sessionId?: string): Promise<string> {
+export async function pollForExecutionOutput(commandName: string, beforeText: string, sessionId?: string): Promise<string> {
   const pollMs = 320
   const stableNeeded = 5
   const maxPolls = 120
@@ -430,6 +672,37 @@ async function summarizeLinesByAi(
 
 function sanitizeOutputLines(text: string): string[] {
   return buildTerminalContextLines(text)
+}
+
+function mergeQueryAiStats(current: QueryAiStats | null, next: QueryAiStats): QueryAiStats {
+  if (!current) return { ...next }
+  const sum = (left: number | undefined, right: number | undefined): number | undefined => {
+    if (left === undefined && right === undefined) return undefined
+    return (left || 0) + (right || 0)
+  }
+  return {
+    provider: next.provider,
+    model: next.model,
+    durationMs: current.durationMs + next.durationMs,
+    inputTokens: sum(current.inputTokens, next.inputTokens),
+    outputTokens: sum(current.outputTokens, next.outputTokens),
+    totalTokens: sum(current.totalTokens, next.totalTokens),
+    estimatedTokens: sum(current.estimatedTokens, next.estimatedTokens)
+  }
+}
+
+async function recordQueryAgentToolTrace(payload: QueryAgentToolTraceRequest): Promise<void> {
+  try {
+    await window.api.queryAgentTraceTool(payload)
+  } catch {
+    // 追踪服务不可用不能影响 Query Agent 的主流程。
+  }
+}
+
+function createQueryAgentCancellationError(): Error {
+  const error = new Error('Query Agent 已取消。')
+  error.name = 'AbortError'
+  return error
 }
 
 function sleep(ms: number): Promise<void> {

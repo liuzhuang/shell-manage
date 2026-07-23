@@ -5,6 +5,7 @@ import { app, ipcMain } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { AppUpdateBroadcastPayload, AppUpdateDisabledReason } from '../shared/types'
 import { formatSparkleExitError, parseSparkleOutputLine } from './sparkle-output'
+import { buildChildProcessEnvironment } from './child-process-env'
 
 const STATUS_CHANNEL = 'app-update:status'
 
@@ -190,7 +191,7 @@ export function setupAutoUpdater(broadcast: (channel: string, payload: unknown) 
       updatePipelineActive = true
       send({ phase: 'downloading', percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 })
 
-      const child = spawn(updaterExecutable, args)
+      const child = spawn(updaterExecutable, args, { env: buildChildProcessEnvironment() })
       sparkleUpdaterProcess = child
       child.stdin.end()
       child.stdout.resume()

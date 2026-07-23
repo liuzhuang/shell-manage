@@ -12,7 +12,16 @@ import type {
   DashboardTab,
   QueryAiStats
 } from '../../shared/types'
-import { applyLangSmithEnvironment } from '../langsmith-env'
+import { createLangSmithTracer } from '../langsmith-tracing'
+import {
+  DASHBOARD_AGENT_NAMES,
+  buildDashboardDelegationInstructions,
+  buildDashboardTraceConfig,
+  createDashboardModelCallCollector,
+  evaluateDashboardAgentRun,
+  selectDashboardAgentRoute,
+  type DashboardAgentRunMetrics
+} from './agent-observability'
 
 type DashboardIntentPayload = {
   assistantReply: string
@@ -37,7 +46,7 @@ const MODEL_MAX_RETRIES = Number(process.env.DASHBOARD_DEEPAGENT_MODEL_MAX_RETRI
 
 const dashboardSubagents: SubAgent[] = [
   {
-    name: 'session-context-agent',
+    name: DASHBOARD_AGENT_NAMES[0],
     description: '收敛目标主机、连接上下文与数据源标识，避免在目标不明确时盲目生成命令。',
     systemPrompt: [
       '你是 SessionContextAgent。',
@@ -47,7 +56,7 @@ const dashboardSubagents: SubAgent[] = [
     ].join('\n')
   },
   {
-    name: 'read-only-planner-agent',
+    name: DASHBOARD_AGENT_NAMES[1],
     description: '将需求转换为只读探针计划（支持 multi-step）并给出组件布局建议。',
     systemPrompt: [
       '你是 ReadOnlyPlannerAgent。',
@@ -57,7 +66,7 @@ const dashboardSubagents: SubAgent[] = [
     ].join('\n')
   },
   {
-    name: 'security-executor-agent',
+    name: DASHBOARD_AGENT_NAMES[2],
     description: '从安全角度审视 probe steps，标注 safe/review/blocked 并给出审计原因。',
     systemPrompt: [
       '你是 SecurityExecutorAgent。',
@@ -66,7 +75,7 @@ const dashboardSubagents: SubAgent[] = [
     ].join('\n')
   },
   {
-    name: 'parser-narrator-agent',
+    name: DASHBOARD_AGENT_NAMES[3],
     description: '为每个组件选择 parserRule，并生成面向用户的状态解释文案。',
     systemPrompt: [
       '你是 ParserNarratorAgent。',
@@ -75,7 +84,7 @@ const dashboardSubagents: SubAgent[] = [
     ].join('\n')
   },
   {
-    name: 'audit-bridge-agent',
+    name: DASHBOARD_AGENT_NAMES[4],
     description: '确保右侧审计面板可映射 widgetId:stepId，突出待授权命令。',
     systemPrompt: [
       '你是 AuditBridgeAgent。',
@@ -195,7 +204,6 @@ async function getSqliteSaver(): Promise<unknown> {
 }
 
 async function getAgent(config: AppConfig): Promise<DeepAgentLike> {
-  applyLangSmithEnvironment(config.settings.langsmith)
   const key = getDashboardAgentCacheKey(config)
   const existing = agentCache.get(key)
   if (existing) {
@@ -229,8 +237,8 @@ async function getAgent(config: AppConfig): Promise<DeepAgentLike> {
       '4) 风险等级仅 safe/review/blocked；',
       '5) kind 仅 metric/table/timeseries/event；',
       '6) parserRule.type 仅 regex/json/awk-table；',
-      '7) 先在内部完成上下文澄清、规划和安全审查，再直接输出最终 JSON。',
-      '8) 除非必须，不要调用 task/write_todos/filesystem 相关工具。',
+      '7) 按每次请求给出的代理委派路由调用 task，综合子 Agent 结果后输出最终 JSON。',
+      '8) 不要调用 write_todos/filesystem；task 仅用于请求给出的代理委派路由。',
       '9) context.availableShellCommands 只包含候选连接的名称与标签；优先使用 context.selectedShellCommandName。未指定时由你选择，并将 dashboard.contextLabel 设为候选名称；probe.steps[].command 仅输出探针本体，不要拼接连接命令。',
       '10) 为避免泄露凭据，context.currentDashboardState 中已有 command 可能为空；更新看板时请依据组件语义重新生成只读探针。'
     ].join('\n')
@@ -560,8 +568,12 @@ async function repairPayloadByModel(
   request: DashboardIntentRequest,
   config: AppConfig,
   rawText: string,
-  semanticErrors: string[] = []
-): Promise<DashboardIntentPayload | null> {
+  semanticErrors: string[] = [],
+  traceConfig?: ReturnType<typeof buildDashboardTraceConfig>
+): Promise<{
+  payload: DashboardIntentPayload | null
+  message: BaseMessage
+}> {
   const model = createModel(config)
   const repairPrompt = [
     '你是 JSON 修复器。请把输入文本转换为合法 JSON。',
@@ -583,9 +595,12 @@ async function repairPayloadByModel(
     '输入文本：',
     rawText
   ].join('\n')
-  const repairResult = await model.invoke([new HumanMessage(repairPrompt)])
+  const repairResult = await model.invoke([new HumanMessage(repairPrompt)], traceConfig)
   const repairText = contentToText(repairResult.content)
-  return parseIntentPayload(repairText) || parseIntentPayload(extractJsonCandidate(repairText) || '')
+  return {
+    payload: parseIntentPayload(repairText) || parseIntentPayload(extractJsonCandidate(repairText) || ''),
+    message: repairResult
+  }
 }
 
 async function invokeWithDiagnostics(
@@ -653,11 +668,20 @@ export async function buildDashboardIntentByDeepAgents(
     semanticErrors?: string[]
     localFixCount?: number
     localFixes?: string[]
+    agentMetrics: DashboardAgentRunMetrics
   }
 }> {
   const provider = config.settings.llm.provider === 'deepseek' ? 'deepseek' : 'openai'
   const startedAt = Date.now()
   const threadId = request.threadId?.trim() || createThreadId()
+  const agentRoute = selectDashboardAgentRoute({
+    actionType: request.actionType,
+    selectedShellCommandName: request.context.selectedShellCommandName
+  })
+  const modelCallCollector = createDashboardModelCallCollector()
+  const langSmithTracer = createLangSmithTracer(config.settings.langsmith)
+  let resultMessages: BaseMessage[] = []
+  const repairMessages: BaseMessage[] = []
   const phaseDurations: {
     agentInitMs?: number
     invokeMs?: number
@@ -670,6 +694,11 @@ export async function buildDashboardIntentByDeepAgents(
   let repairAttempted = false
   let localFixCount = 0
   const localFixes: string[] = []
+  console.info('[dashboard][intent][deepagents] agent route selected', {
+    threadId,
+    route: agentRoute.name,
+    expectedAgents: agentRoute.expectedAgents
+  })
   console.info('[dashboard][intent][deepagents] start', {
     threadId,
     actionType: request.actionType,
@@ -707,6 +736,8 @@ export async function buildDashboardIntentByDeepAgents(
     '  "dashboard": { ...DashboardTab... }',
     '}',
     '',
+    buildDashboardDelegationInstructions(agentRoute),
+    '',
     '字段约束：',
     '- riskLevel 仅 safe/review/blocked',
     '- kind 仅 metric/table/timeseries/event',
@@ -729,13 +760,22 @@ export async function buildDashboardIntentByDeepAgents(
     const invokePayload = {
       messages: [new HumanMessage(prompt)]
     }
-    const invokeConfig = {
-      configurable: {
-        thread_id: threadId
-      }
-    }
+    const invokeConfig = buildDashboardTraceConfig({
+      threadId,
+      agentName: 'dashboard-orchestrator',
+      route: agentRoute,
+      repair: false,
+      calls: agentRoute.expectedAgents.length
+    })
+    invokeConfig.callbacks = [
+      modelCallCollector.callback,
+      ...(langSmithTracer ? [langSmithTracer] : [])
+    ]
     const invokeStartedAt = Date.now()
     const result = await invokeWithDiagnostics(agent, invokePayload, invokeConfig, threadId, onProgress)
+    resultMessages = Array.isArray((result as { messages?: BaseMessage[] }).messages)
+      ? (result as { messages: BaseMessage[] }).messages
+      : []
     phaseDurations.invokeMs = Date.now() - invokeStartedAt
     console.info('[dashboard][intent][deepagents] phase done', {
       threadId,
@@ -746,7 +786,7 @@ export async function buildDashboardIntentByDeepAgents(
     const parsedFromStructured = parseIntentPayload(
       JSON.stringify((result as { structuredResponse?: unknown }).structuredResponse || null)
     )
-    const assistantText = extractLastAssistantText((result as { messages?: BaseMessage[] }).messages)
+    const assistantText = extractLastAssistantText(resultMessages)
     console.info('[dashboard][intent][deepagents] raw assistant output', {
       threadId,
       textLength: assistantText.length,
@@ -802,7 +842,26 @@ export async function buildDashboardIntentByDeepAgents(
         phase: 'llm_repair_start',
         message: '语义校验未通过，正在请求模型进行修复。'
       })
-      parsed = await repairPayloadByModel(request, config, assistantText, semanticValidation.errors)
+      const repairTraceConfig = buildDashboardTraceConfig({
+        threadId,
+        agentName: 'dashboard-repair-agent',
+        route: agentRoute,
+        repair: true,
+        calls: 1
+      })
+      repairTraceConfig.callbacks = [
+        modelCallCollector.callback,
+        ...(langSmithTracer ? [langSmithTracer] : [])
+      ]
+      const repairResult = await repairPayloadByModel(
+        request,
+        config,
+        assistantText,
+        semanticValidation.errors,
+        repairTraceConfig
+      )
+      repairMessages.push(repairResult.message)
+      parsed = repairResult.payload
       if (parsed) {
         const localRepair = applyLocalSemanticRepair(parsed.dashboard)
         parsed.dashboard = localRepair.dashboard
@@ -853,16 +912,32 @@ export async function buildDashboardIntentByDeepAgents(
       throw new Error(`deepagents 结果语义校验失败：${semanticValidation.errors.join('；') || '无法解析为合法 Dashboard JSON'}`)
     }
 
+    const durationMs = Date.now() - startedAt
+    const agentMetrics = evaluateDashboardAgentRun({
+      route: agentRoute,
+      messages: resultMessages,
+      repairMessages,
+      completed: true,
+      repairAttempted,
+      latencyMs: {
+        total: durationMs,
+        agentInit: phaseDurations.agentInitMs,
+        invoke: phaseDurations.invokeMs,
+        repair: phaseDurations.repairMs
+      },
+      modelObservation: modelCallCollector.snapshot()
+    })
     console.info('[dashboard][intent][deepagents] success', {
       threadId,
-      durationMs: Date.now() - startedAt,
+      durationMs,
       parsedBy,
       widgets: parsed.dashboard.widgets.length,
       widgetIds: parsed.dashboard.widgets.map((item) => item.id),
       totalSteps: parsed.dashboard.widgets.reduce((sum, item) => sum + item.probe.steps.length, 0),
       assistantPreview: parsed.assistantReply.slice(0, 200),
       localFixCount,
-      phaseDurations
+      phaseDurations,
+      agentMetrics
     })
     emitProgress(onProgress, {
       threadId,
@@ -876,7 +951,10 @@ export async function buildDashboardIntentByDeepAgents(
       assistantReply: parsed.assistantReply,
       threadId,
       stats: {
-        durationMs: Date.now() - startedAt,
+        durationMs,
+        ...(agentMetrics.usage.inputTokens !== undefined ? { inputTokens: agentMetrics.usage.inputTokens } : {}),
+        ...(agentMetrics.usage.outputTokens !== undefined ? { outputTokens: agentMetrics.usage.outputTokens } : {}),
+        ...(agentMetrics.usage.totalTokens !== undefined ? { totalTokens: agentMetrics.usage.totalTokens } : {}),
         estimatedTokens: estimateTokens(request.userQuery, JSON.stringify(parsed.dashboard).slice(0, 2000)),
         provider,
         model: config.settings.llm.model
@@ -887,14 +965,30 @@ export async function buildDashboardIntentByDeepAgents(
         semanticErrors: semanticValidation.errors,
         semanticErrorCount: semanticValidation.errors.length,
         ...(localFixCount > 0 ? { localFixCount } : {}),
-        ...(localFixes.length > 0 ? { localFixes } : {})
+        ...(localFixes.length > 0 ? { localFixes } : {}),
+        agentMetrics
       }
     }
   } catch (error) {
+    const agentMetrics = evaluateDashboardAgentRun({
+      route: agentRoute,
+      messages: resultMessages,
+      repairMessages,
+      completed: false,
+      repairAttempted,
+      latencyMs: {
+        total: Date.now() - startedAt,
+        agentInit: phaseDurations.agentInitMs,
+        invoke: phaseDurations.invokeMs,
+        repair: phaseDurations.repairMs
+      },
+      modelObservation: modelCallCollector.snapshot()
+    })
     console.error('[dashboard][intent][deepagents] failed', {
       threadId,
       durationMs: Date.now() - startedAt,
       phaseDurations,
+      agentMetrics,
       error: toErrorText(error)
     })
     emitProgress(onProgress, {

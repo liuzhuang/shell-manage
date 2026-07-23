@@ -6,7 +6,7 @@ Skill 规则和产品参考资料都位于 `skills/shell-manage-assistant/`。
 
 当前只使用 Skill 自身携带的参考资料：
 
-1. `<skill-root>/references/distribution-manifest.yaml`
+1. `<skill-root>/references/install-and-upgrade.md`
 
 ## 辅助脚本
 
@@ -30,7 +30,6 @@ bash scripts/resolve-knowledge-root.sh --verify --json
 
 | 文件 | 路径 |
 |---|---|
-| `distribution-manifest.yaml` | `references/distribution-manifest.yaml` |
 | `install-and-upgrade.md` | `references/install-and-upgrade.md` |
 | `config-schema.md` | `references/config-schema.md` |
 | `config-workflow.md` | `references/config-workflow.md` |

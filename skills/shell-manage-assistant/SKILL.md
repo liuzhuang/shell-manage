@@ -5,7 +5,6 @@ description: >-
   onboarding, and troubleshooting. Use when the user asks about shell-manage
   installation, setup, command onboarding, config changes, SSH entries, or
   operational Q&A after this skill has been loaded.
-compatibility: macOS. Bundled scripts require bash and ruby.
 metadata:
   version: "1.0.0"
   knowledge-root: references
@@ -53,10 +52,10 @@ Installation of this skill is separate. See [INSTALL.md](INSTALL.md).
 1. **Classify intent** — install/upgrade, config change, usage Q&A, troubleshooting
 2. **Resolve knowledge root** — run script or follow [references/knowledge-path.md](references/knowledge-path.md)
 3. **Load docs first**
-   - Install/release: `references/distribution-manifest.yaml`, `references/install-and-upgrade.md`
+   - Install/release: `references/install-and-upgrade.md`
    - Config: `references/config-schema.md`, `references/config-workflow.md`, `references/command-recipes.md`
    - Issues: `references/troubleshooting.md`
-4. **Guard distribution placeholders** — if manifest contains placeholder URL/SHA (for example `example.com`, `REPLACE_WITH_REAL_SHA256`), stop and ask for real release metadata before giving install/upgrade steps
+4. **Resolve public releases** — use GitHub Releases as the only public version and installation source; online, accept only the latest non-draft, non-prerelease release and its returned assets; offline or when release data cannot be verified, return only the Releases page
 5. **Plan response** — next step, success criteria, rollback
 6. **For config writes** — follow [references/config-protocol.md](references/config-protocol.md); never write before validation and explicit confirmation
 7. **Validate after write** — `bash scripts/validate-config-structure.sh --json <config>` (path relative to skill root)
@@ -81,8 +80,9 @@ Use exactly the standard template in `references/runtime-protocols.md` (`阶段`
 ## Gotchas
 
 - **Knowledge source** — always use bundled `references/*`
-- **Download URLs** — always from `distribution-manifest.yaml`, never invent URLs
-- **Manifest placeholders** — if URL/SHA looks like template placeholders, stop and ask for real distribution metadata
+- **Public release truth** — use only `https://github.com/liuzhuang/shell-manage/releases`; never infer a public version from source files
+- **Download URLs** — online, copy only `browser_download_url` values returned for assets of the verified latest stable release
+- **Offline fallback** — return only the Releases page; never guess a version, asset URL, checksum, or architecture
 - **Unconfirmed writes** — never modify config without explicit user confirmation
 - **Same-name overwrite / delete / settings edits** — require second confirmation
 - **Project command paths** — project-local startup commands must include `cd <abs-path> &&`; standalone SSH or macOS app commands are exceptions

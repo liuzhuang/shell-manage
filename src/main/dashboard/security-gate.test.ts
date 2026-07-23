@@ -112,6 +112,50 @@ test('确定性写入和状态变化只能手动确认', async () => {
   }
 })
 
+test('通用解释器和动态执行入口只能手动确认', async () => {
+  const { assessCommandForAutoExecution } = await loadSecurityGate()
+  const reviewCommands = [
+    "python3 -c 'import os; os.remove(\"/tmp/example\")'",
+    'python3 scripts/check.py',
+    "node -e 'require(\"fs\").rmSync(\"/tmp/example\")'",
+    'node scripts/check.js',
+    "perl -e 'unlink \"/tmp/example\"'",
+    'ruby scripts/check.rb',
+    'php scripts/check.php',
+    'lua scripts/check.lua',
+    "osascript -e 'do shell script \"rm -rf /tmp/example\"'",
+    "awk 'BEGIN { system(\"rm -rf /tmp/example\") }'",
+    "gawk 'BEGIN { system(\"rm -rf /tmp/example\") }'",
+    "pwsh -Command 'Remove-Item -Recurse /tmp/example'"
+  ]
+
+  for (const command of reviewCommands) {
+    const assessment = assessCommandForAutoExecution(command, 'safe')
+    assert.equal(assessment.riskLevel, 'review', command)
+    assert.equal(assessment.canAutoExecute, false, command)
+  }
+})
+
+test('直接执行路径程序只能手动确认，未知 PATH 命令仍可自动执行', async () => {
+  const { assessCommandForAutoExecution } = await loadSecurityGate()
+  const reviewCommands = [
+    './scripts/check-status',
+    'scripts/check-status',
+    '../tools/check-status',
+    '/usr/local/bin/check-status',
+    '/tmp/check-status',
+    '~/bin/check-status'
+  ]
+
+  for (const command of reviewCommands) {
+    const assessment = assessCommandForAutoExecution(command, 'safe')
+    assert.equal(assessment.riskLevel, 'review', command)
+    assert.equal(assessment.canAutoExecute, false, command)
+  }
+
+  assert.equal(assessCommandForAutoExecution('custom-observer --status', 'safe').riskLevel, 'safe')
+})
+
 test('明确破坏命令即使 Agent 判定 safe 也会被主策略阻止', async () => {
   const { assessCommandForAutoExecution, hardenCommandForAutoExecution } = await loadSecurityGate()
   const blockedCommands = [

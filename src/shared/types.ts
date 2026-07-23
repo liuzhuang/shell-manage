@@ -310,7 +310,7 @@ export interface AppConfig {
       model: string
     }
     langsmith?: {
-      tracingV2?: boolean
+      tracing?: boolean
       endpoint?: string
       apiKey?: string
       project?: string
@@ -527,6 +527,11 @@ export interface QueryAiHistoryItem {
   role: 'user' | 'assistant'
   content: string
   action?: QueryAiAction
+  execution?: {
+    command: string
+    status: 'pending' | 'running' | 'completed' | 'waiting_for_review' | 'failed' | 'cancelled'
+    message?: string
+  }
 }
 
 export interface QueryCommandRiskAssessment {
@@ -537,14 +542,18 @@ export interface QueryCommandRiskAssessment {
 
 export interface QueryAiRequest {
   requestId: string
+  agentRunId?: string
+  stepIndex?: number
   input: string
   history: QueryAiHistoryItem[]
   selectedCommand?: string
   terminalSessionId?: string
   terminalInstanceId?: string
   targetLogPath?: string
+  rememberedLogPaths?: string[]
   sessionLogs: string[]
   queryOutputLines: string[]
+  forceReply?: boolean
 }
 
 export interface QueryAiResponse {
@@ -554,10 +563,40 @@ export interface QueryAiResponse {
   stats: QueryAiStats
 }
 
-export interface QueryAiStreamPayload {
+export type QueryAgentPhase =
+  | 'generating_query'
+  | 'assessing_risk'
+  | 'executing'
+  | 'analyzing_result'
+  | 'completed'
+  | 'waiting_for_review'
+  | 'cancelled'
+  | 'failed'
+
+export interface QueryAgentToolTraceRequest {
+  agentRunId: string
+  stepIndex: number
+  command: string
+  output: string
+  status: 'completed' | 'waiting_for_review' | 'failed' | 'cancelled'
+  durationMs: number
+}
+
+export interface QueryAgentTraceFinishRequest {
+  agentRunId: string
+  phase: QueryAgentPhase
+  executedCommandCount: number
+  stepCount: number
+  durationMs: number
+  stats?: QueryAiStats
+  finalAnswer?: string
+  error?: string
+}
+
+export interface QueryAiProgressPayload {
   requestId: string
-  phase: 'start' | 'chunk' | 'end' | 'error'
-  text?: string
+  phase: QueryAgentPhase
+  message?: string
   error?: string
   stats?: QueryAiStats
 }

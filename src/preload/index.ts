@@ -21,7 +21,9 @@ import type {
   ProjectDirectoryValidation,
   QueryAiRequest,
   QueryAiResponse,
-  QueryAiStreamPayload,
+  QueryAiProgressPayload,
+  QueryAgentToolTraceRequest,
+  QueryAgentTraceFinishRequest,
   QueryCommandRiskAssessment,
   LocalTopSnapshot,
   PortInspectionResult,
@@ -55,6 +57,8 @@ import type {
   BrowserTabUpdatedPayload,
   BrowserTheme
 } from '../shared/browser-types'
+import type { RunQueryAgentOptions } from '../shared/query-agent'
+import { runQueryAgent } from './query-agent-runner'
 
 const api = {
   getAppVersion: () => ipcRenderer.invoke('app:get-version') as Promise<string>,
@@ -116,8 +120,14 @@ const api = {
   },
 
   queryExecute: (command: string) => ipcRenderer.invoke('query:execute', command),
-  queryCancel: () => ipcRenderer.invoke('query:cancel'),
+  queryCancel: (requestId?: string) =>
+    ipcRenderer.invoke('query:cancel', requestId) as Promise<{ ok: boolean; cancelledAiRequest: boolean }>,
   queryAiChat: (payload: QueryAiRequest) => ipcRenderer.invoke('query:ai-chat', payload) as Promise<QueryAiResponse>,
+  queryAgentRun: (options: RunQueryAgentOptions) => runQueryAgent(options),
+  queryAgentTraceTool: (payload: QueryAgentToolTraceRequest) =>
+    ipcRenderer.invoke('query:agent-trace-tool', payload) as Promise<{ ok: boolean; recorded: boolean }>,
+  queryAgentTraceFinish: (payload: QueryAgentTraceFinishRequest) =>
+    ipcRenderer.invoke('query:agent-trace-finish', payload) as Promise<{ ok: boolean; recorded: boolean }>,
   queryAssessAutoExecution: (command: string, autoExecutionToken?: string) =>
     ipcRenderer.invoke('query:assess-auto-execution', command, autoExecutionToken) as Promise<QueryCommandRiskAssessment>,
   onQueryOutput: (handler: (payload: QueryOutputPayload) => void) => {
@@ -125,10 +135,10 @@ const api = {
     ipcRenderer.on('query:output', wrapped)
     return () => ipcRenderer.removeListener('query:output', wrapped)
   },
-  onQueryAiStream: (handler: (payload: QueryAiStreamPayload) => void) => {
-    const wrapped = (_e: unknown, payload: QueryAiStreamPayload) => handler(payload)
-    ipcRenderer.on('query:ai-stream', wrapped)
-    return () => ipcRenderer.removeListener('query:ai-stream', wrapped)
+  onQueryAiProgress: (handler: (payload: QueryAiProgressPayload) => void) => {
+    const wrapped = (_e: unknown, payload: QueryAiProgressPayload) => handler(payload)
+    ipcRenderer.on('query:ai-progress', wrapped)
+    return () => ipcRenderer.removeListener('query:ai-progress', wrapped)
   },
 
   presetExecute: (presetName: string) => ipcRenderer.invoke('preset:execute', presetName),
@@ -199,11 +209,13 @@ const api = {
       sessionId?: string
       expectedInstanceId?: string
       autoExecutionToken?: string
+      awaitCompletion?: boolean
     }
   ) =>
     ipcRenderer.invoke('terminal:input', commandName, data, options) as Promise<{
       ok: boolean
       completed?: boolean
+      executionFailed?: boolean
       riskLevel?: QueryCommandRiskAssessment['riskLevel']
       message?: string
     }>,

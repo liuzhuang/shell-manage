@@ -2,15 +2,16 @@
 
 ## 1. 无法取得公开安装包
 
-先检查 `distribution-manifest.yaml`：
+先请求 `https://api.github.com/repos/liuzhuang/shell-manage/releases/latest`：
 
-1. URL 是否仍指向 `example.com`
-2. 版本是否仍为占位值
-3. SHA-256 是否仍为 `REPLACE_WITH_REAL_SHA256`
+1. 返回项是否为 `draft: false`、`prerelease: false`
+2. `tag_name` 是否非空
+3. `assets` 中是否存在匹配设备的真实安装资产
+4. 下载地址是否直接来自该资产的 `browser_download_url`
 
-任一项仍为占位值时，说明当前没有可用的公开分发元数据。停止下载、升级和回滚指导，不尝试猜测地址。
+任一项无法确认时，只返回 `https://github.com/liuzhuang/shell-manage/releases`。不尝试猜测版本、下载地址、SHA、架构或文件名，也不从 `package.json` 推断公开版本。
 
-已有仓库源码时，可以改为本地构建：
+只有明确请求从源码构建且已有仓库副本时，才执行：
 
 ```bash
 npm run build:installer:mac

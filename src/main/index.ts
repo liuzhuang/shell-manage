@@ -11,6 +11,9 @@ import { ProcessManager } from './process-manager'
 import { normalizeRuntimeEnv } from './shell-runtime'
 import { TrayManager } from './tray-manager'
 import { setupApplicationMenu } from './app-menu'
+import { captureLangSmithEnvironment } from './langsmith-env'
+
+captureLangSmithEnvironment()
 
 let mainWindow: BrowserWindow | undefined
 let currentConfig: AppConfig
@@ -126,6 +129,7 @@ function createWindow(): void {
 
 app.whenReady().then(async () => {
   await normalizeRuntimeEnv()
+  captureLangSmithEnvironment()
 
   if (process.platform === 'darwin') {
     const dockIconPath = resolveIconPath('icon.png')

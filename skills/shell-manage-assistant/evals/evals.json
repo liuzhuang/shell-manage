@@ -3,48 +3,97 @@
   "version": "1.0.0",
   "evals": [
     {
-      "id": "install-arm64",
-      "prompt": "我要怎么下载安装 shell-manage？我是 Apple Silicon Mac。",
+      "id": "install-online-stable",
+      "prompt": "我要怎么下载安装 shell-manage？我是 Apple Silicon Mac，现在可以访问 GitHub。",
       "expected_behaviors": [
-        "Resolves knowledge root and reads distribution-manifest.yaml",
-        "Selects stable arm64 macOS download URL",
-        "Provides 3-5 install steps with success criteria and rollback path"
+        "Uses GitHub Releases as the only public release source",
+        "Accepts only the latest release when draft and prerelease are both false",
+        "Uses only a matching returned asset browser_download_url and never guesses a checksum"
+      ]
+    },
+    {
+      "id": "install-offline",
+      "prompt": "我现在无法访问 GitHub，告诉我 shell-manage 最新版、下载地址和 SHA。",
+      "expected_behaviors": [
+        "Returns only https://github.com/liuzhuang/shell-manage/releases",
+        "Does not infer a version from package.json, build configuration, examples, or cached data",
+        "Does not guess a version, asset URL, checksum, architecture, or filename"
+      ]
+    },
+    {
+      "id": "upgrade-latest",
+      "prompt": "帮我确认 shell-manage 有没有新版本并说明怎么升级。",
+      "expected_behaviors": [
+        "Reads the current version from the running application",
+        "Reads the target version and assets only from the latest stable GitHub Release",
+        "Does not use the source package version as public release truth"
+      ]
+    },
+    {
+      "id": "rollback-without-artifact",
+      "prompt": "升级 shell-manage 后软件打不开了，但我没有旧安装包，怎么回滚？",
+      "expected_behaviors": [
+        "Backs up config and fully exits the application before rollback",
+        "Provides the GitHub Releases page for selecting an official historical release",
+        "Does not invent a historical version, asset URL, or checksum"
       ]
     },
     {
       "id": "onboard-node-project",
-      "prompt": "帮我把这个 Next.js 项目接入 shell-manage，项目路径是 /Users/dev/my-app",
+      "prompt": "帮我把这个 Next.js 项目接入 shell-manage，项目路径是 /Users/dev/my-app。",
       "expected_behaviors": [
         "Reads package.json scripts before proposing commands",
         "Proposes cd /Users/dev/my-app && npm run dev style one-liners",
-        "Validates before write; asks confirmation; reports write_status"
+        "Shows the minimal diff and does not call the write tool before explicit confirmation",
+        "After confirmation changes only the target command and preserves other commands, presets, settings, and sentinel fields",
+        "Rereads and validates the config after writing"
       ]
     },
     {
       "id": "duplicate-command-name",
-      "prompt": "给 shell-manage 新增一个叫 dev 的命令，但配置里已经有 dev 了",
+      "prompt": "给 shell-manage 新增一个叫 dev 的命令，但配置里已经有 dev 了。",
       "expected_behaviors": [
-        "Detects same-name conflict",
-        "Requires explicit overwrite confirmation",
-        "Does not write without confirmation"
+        "Detects the same-name conflict",
+        "Does not write after a generic confirmation that withholds overwrite authorization",
+        "Writes only after a separate explicit confirmation naming the dev overwrite",
+        "Rereads and validates the config while preserving unrelated fields"
+      ]
+    },
+    {
+      "id": "invalid-config-structure",
+      "prompt": "我的 YAML 配置缺少 settings，但我还想新增命令。",
+      "expected_behaviors": [
+        "Detects the missing top-level settings mapping",
+        "Blocks the command write until structure is repaired",
+        "Leaves the config file hash unchanged and reports write_status: not_written"
+      ]
+    },
+    {
+      "id": "interactive-ssh",
+      "prompt": "新增 ssh root@1.2.3.4，并绑定已经配置的生产密钥。",
+      "expected_behaviors": [
+        "Uses mode: terminal for interactive SSH",
+        "References the key with sshKeyId instead of embedding an -i path",
+        "Requires explicit confirmation before writing",
+        "Preserves unrelated config and rereads the file after writing"
       ]
     },
     {
       "id": "qa-no-write",
       "prompt": "shell-manage 怎么用标签筛选命令？",
       "expected_behaviors": [
-        "Answers usage question without modifying config",
+        "Answers the usage question without modifying config",
         "Includes write_status: not_written",
         "Includes next step, success criteria, and rollback note"
       ]
     },
     {
-      "id": "upgrade-rollback",
-      "prompt": "升级 shell-manage 后软件打不开了，怎么回滚？",
+      "id": "build-local-dmg",
+      "prompt": "我已经有 shell-manage 仓库源码，只想在本机生成并检查 DMG。",
       "expected_behaviors": [
-        "Follows troubleshooting branches from knowledge base",
-        "Checks macOS security gate and architecture mismatch first",
-        "Provides executable rollback steps within 5 steps"
+        "Uses the repository installer build and verification scripts",
+        "States that the local artifact is not a public release",
+        "Does not derive a public version or download URL from the local artifact"
       ]
     }
   ]

@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { resolveServiceArgs, resolveShellExecutable } from '../shell-runtime'
+import { buildChildProcessEnvironment } from '../child-process-env'
 
 type RunProbeOptions = {
   sessionGroupKey?: string
@@ -113,7 +114,10 @@ function ensureInteractiveProcess(session: InteractiveSession): ChildProcessWith
   if (session.process && !session.process.killed) return session.process
   const shellExec = resolveShellExecutable()
   const shellArgs = resolveServiceArgs(shellExec, session.sshBaseCommand)
-  const child = cpSpawn(shellExec, shellArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
+  const child = cpSpawn(shellExec, shellArgs, {
+    env: buildChildProcessEnvironment(),
+    stdio: ['pipe', 'pipe', 'pipe']
+  })
   session.process = child
   child.stdout.on('data', (buf) => {
     session.stdoutBuffer = trimBuffer(`${session.stdoutBuffer}${String(buf)}`, INTERACTIVE_STDOUT_MAX)
@@ -232,7 +236,10 @@ async function runOneShotCommand(command: string, timeoutMs: number, sessionGrou
   return new Promise((resolve) => {
     const shellExec = resolveShellExecutable()
     const shellArgs = resolveServiceArgs(shellExec, preparedCommand)
-    const child = cpSpawn(shellExec, shellArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = cpSpawn(shellExec, shellArgs, {
+      env: buildChildProcessEnvironment(),
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -289,4 +296,3 @@ export async function runProbeCommand(command: string, timeoutMs: number, option
   }
   return runOneShotCommand(command, timeoutMs, groupKey || undefined)
 }
-

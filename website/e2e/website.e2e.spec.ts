@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 const downloadUrl = 'https://github.com/liuzhuang/shell-manage/releases'
+const lensPointerOffset = 48
 
 test.describe('ShellManage 官网', () => {
   test('首页说明核心用途并提供下载入口', async ({ page }) => {
@@ -10,22 +11,24 @@ test.describe('ShellManage 官网', () => {
     await expect(page.getByTestId('home-page')).toBeVisible()
 
     const hero = page.getByTestId('hero')
-    await expect(hero.getByRole('heading', { level: 1 })).toHaveText('不用记命令，也不用重复输入。')
-    await expect(hero).toContainText('项目启动命令、SSH 隧道和其他重复操作')
+    await expect(hero).toContainText('For Vibe Coding')
+    await expect(hero.getByRole('heading', { level: 1 })).toHaveText('好记性不如烂笔头')
+    await expect(hero).toContainText('一次保存（启动命令、SSH 隧道），多次运行，实时查看状态和日志。')
 
     const downloadButtons = page.getByTestId('download-button')
     await expect(downloadButtons).toHaveCount(4)
     for (const button of await downloadButtons.all()) {
-      await expect(button).toHaveText('下载')
       await expect(button).toHaveAttribute('href', downloadUrl)
     }
+    await expect(downloadButtons.filter({ hasText: '手动下载安装' })).toHaveCount(1)
   })
 
   test('首页按三组展示九张产品截图', async ({ page }) => {
     await page.goto('/')
 
     await expect(page.getByTestId('core-workflow')).toContainText('核心工作流')
-    await expect(page.getByTestId('development-workspace')).toContainText('开发现场')
+    await expect(page.getByTestId('development-workspace')).toContainText('开发环境')
+    await expect(page.getByTestId('development-workspace')).toContainText('AI 查日志')
     await expect(page.getByTestId('remote-and-team')).toContainText('远程与团队')
 
     const images = page.locator('.product-shot img')
@@ -44,7 +47,7 @@ test.describe('ShellManage 官网', () => {
     for (const image of await deferredImages.all()) await expect(image).toHaveAttribute('loading', 'lazy')
   })
 
-  test('三步上手区域复制 Agent 导入指令并公开对应文档', async ({ page, request }) => {
+  test('三步上手安装使用区域复制 Agent 提示词并公开对应文档', async ({ page, request }) => {
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
@@ -56,16 +59,29 @@ test.describe('ShellManage 官网', () => {
     await page.goto('/#getting-started')
 
     const guideUrl = new URL('/doc/shell-manage-assistant.md', page.url()).href
+    const installGuideUrl = new URL('/doc/install.md', page.url()).href
+    const installInstruction = `请阅读 ${installGuideUrl}，按照文档下载并安装 ShellManage。`
     const importInstruction =
       `请阅读 ${guideUrl}，按照文档分析当前项目，并将验证通过的启动命令导入 ShellManage。`
     const section = page.getByTestId('getting-started')
+    await expect(section.getByText('三步上手安装使用', { exact: true })).toBeVisible()
     await expect(section.locator('.onboarding-step')).toHaveCount(3)
+    await expect(section.getByRole('heading', { name: 'Agent 一键接入' })).toBeVisible()
+    await expect(section.getByRole('heading', { name: '添加命令', exact: true })).toBeVisible()
+    await expect(section.getByRole('heading', { name: '点击启动新命令' })).toBeVisible()
+    await expect(section.getByTestId('install-instruction')).toHaveText(installInstruction)
     await expect(section.getByTestId('import-instruction')).toHaveText(importInstruction)
-    await expect(section.getByTestId('install-guide-link')).toHaveAttribute('href', '/doc/install/')
-    await expect(section.getByTestId('assistant-guide-link')).toHaveAttribute(
-      'href',
-      '/doc/shell-manage-assistant/'
-    )
+    await expect(section.getByTestId('install-instruction').getByRole('link')).toHaveAttribute('href', installGuideUrl)
+    await expect(section.getByTestId('install-instruction').getByRole('link')).toHaveAttribute('target', '_blank')
+    await expect(section.getByTestId('import-instruction').getByRole('link')).toHaveAttribute('href', guideUrl)
+    await expect(section.getByTestId('import-instruction').getByRole('link')).toHaveAttribute('target', '_blank')
+    await expect(section.getByTestId('install-instruction-copy')).toHaveText('复制提示词')
+    await expect(section.getByTestId('import-instruction-copy')).toHaveText('复制提示词')
+
+    await section.getByTestId('install-instruction-copy').click()
+    await expect(section.getByTestId('install-instruction-copy')).toHaveText('已复制，请发送给 Agent')
+    expect(await page.evaluate(() => window.localStorage.getItem('copied-text'))).toBe(installInstruction)
+    await expect(section.getByRole('link', { name: '手动下载安装', exact: true })).toHaveAttribute('href', downloadUrl)
 
     await section.getByTestId('import-instruction-copy').click()
     await expect(section.getByTestId('import-instruction-copy')).toHaveText('已复制，请发送给 Agent')
@@ -81,10 +97,6 @@ test.describe('ShellManage 官网', () => {
     expect(installGuide.headers()['content-type']).toContain('charset=utf-8')
     expect(await installGuide.text()).toContain('下载并安装 ShellManage')
 
-    await page.goto('/doc/install/')
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('下载并安装 ShellManage')
-    await page.goto('/doc/shell-manage-assistant/')
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('用 Agent 导入项目命令')
   })
 
   test('产品截图支持局部放大和全屏查看', async ({ page }) => {
@@ -105,8 +117,8 @@ test.describe('ShellManage 官网', () => {
           top: lensBox.top - screenshotBox.top
         }
       })
-      expect(placement.left).toBeCloseTo(box.width / 2, 0)
-      expect(placement.top).toBeCloseTo(box.height / 2, 0)
+      expect(placement.left).toBeCloseTo(box.width / 2 - lensPointerOffset, 0)
+      expect(placement.top).toBeCloseTo(box.height / 2 - lensPointerOffset, 0)
     }
 
     await screenshot.click()

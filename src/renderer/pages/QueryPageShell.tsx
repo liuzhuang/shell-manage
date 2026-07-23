@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import type { CommandConfig, QueryAiAction, QueryAiHistoryItem, QueryAiResponse } from '../../shared/types'
+import type { CommandConfig, QueryAgentPhase, QueryAiAction, QueryAiHistoryItem, QueryAiResponse } from '../../shared/types'
+import { TerminalIcon } from '../components/icons/TerminalIcon'
 import { XIcon } from '../components/icons/XIcon'
+import type { QueryAgentExecutionResult, QueryAgentReviewRequest } from '../lib/query-agent-runner'
 import { formatTerminalTuiEntry, type TerminalTuiTone } from '../lib/terminalTui'
 import { buttonStyle, inputStyle } from '../lib/uiStyles'
 import { buildTerminalContextLines } from '../lib/terminalContext'
 
-type TimelineEntry = { key: string; at: number; role: 'user' | 'assistant'; content: string; action?: QueryAiAction }
+type TimelineEntry = QueryAiHistoryItem & { key: string; at: number }
 type QueryExecutionTarget = {
   commandName: string
   sessionId: string
@@ -19,12 +21,35 @@ type AutoExecutionCapability = {
   supported: boolean | null
   capable: boolean
 }
+type DraftCommandExecutionResult =
+  | { ok: true }
+  | { ok: false; status: 'waiting_for_review' | 'failed' | 'cancelled'; message: string }
+type PendingAgentReview = {
+  request: QueryAgentReviewRequest
+  target: QueryExecutionTarget
+  executing: boolean
+  resolve: (result: QueryAgentExecutionResult) => void
+}
 
 const CONFIRM_EXECUTE_STORAGE_KEY = 'query.ai.confirmExecute.v1'
 const AUTO_EXECUTE_STORAGE_KEY = 'query.ai.autoExecuteLowRisk.v2'
+const WORKBENCH_GEOMETRY_STORAGE_KEY = 'query.ai.workbenchGeometry.v3'
 const QUERY_TERMINAL_SOURCE = 'query'
 const QUERY_AUTO_TERMINAL_SOURCE = 'query-auto'
 const QUERY_TERMINAL_SESSION_PREFIX = 'query'
+const WORKBENCH_RESIZE_DIRECTIONS = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'] as const
+type WorkbenchResizeDirection = (typeof WORKBENCH_RESIZE_DIRECTIONS)[number]
+type WorkbenchGeometry = { x: number; y: number; width?: number; height?: number }
+type RectSnapshot = { top: number; right: number; bottom: number; left: number; width: number; height: number }
+type WorkbenchResizeState = {
+  pointerId: number
+  direction: WorkbenchResizeDirection
+  x: number
+  y: number
+  rect: RectSnapshot
+  bounds: RectSnapshot
+  geometry: WorkbenchGeometry
+}
 const SECTION_STYLE = {
   border: '1px solid var(--border-subtle)',
   borderRadius: 'var(--radius-sm)',
@@ -50,7 +75,7 @@ const selectStyle: CSSProperties = {
   borderRadius: 'var(--radius-sm)',
   background: 'var(--panel)',
   color: 'var(--text)',
-  padding: '0 10px',
+  padding: '0 10px 0 30px',
   fontSize: 12,
   fontFamily: 'var(--font-ui)'
 }
@@ -62,15 +87,20 @@ export function QueryPage(props: {
   chatHistory: Array<QueryAiHistoryItem & { at: number }>
   streamingText: string
   isStreaming: boolean
+  agentPhase: QueryAgentPhase | null
   commands: CommandConfig[]
   selectedCommand: string
   terminalBadgeState: 'running' | 'idle_with_cache' | 'idle_empty'
   setQueryInput: (text: string) => void
   clearChatHistory: () => void
+  cancel: () => Promise<void>
   translate: (context: {
     sessionLogs: string[]
     terminalSessionId: string
     terminalInstanceId?: string
+    executeCommand: (response: QueryAiResponse) => Promise<QueryAgentExecutionResult>
+    reviewCommand: (request: QueryAgentReviewRequest) => Promise<QueryAgentExecutionResult>
+    shouldContinue: () => boolean
   }) => Promise<QueryAiResponse | undefined>
   selectCommand: (name: string) => void
   onActionError: (message: string) => void
@@ -88,11 +118,13 @@ export function QueryPage(props: {
     chatHistory,
     streamingText,
     isStreaming,
+    agentPhase,
     commands,
     selectedCommand,
     terminalBadgeState,
     setQueryInput,
     clearChatHistory,
+    cancel,
     translate,
     selectCommand,
     onActionError,
@@ -101,44 +133,65 @@ export function QueryPage(props: {
   } = props
 
   const [showHistoryPopover, setShowHistoryPopover] = useState(false)
+  const [showMorePopover, setShowMorePopover] = useState(false)
   const [workspaceMode, setWorkspaceMode] = useState<'ask' | 'command'>('ask')
   const [autoFollowTimeline, setAutoFollowTimeline] = useState(true)
   const [showTerminalFullscreen, setShowTerminalFullscreen] = useState(false)
-  const [terminalSessionState, setTerminalSessionState] = useState<'running' | 'idle'>('idle')
+  const [terminalSessionState, setTerminalSessionState] = useState<'connecting' | 'running' | 'idle'>('idle')
   const [pendingAiCommand, setPendingAiCommand] = useState('')
   const [confirmBeforeExecute, setConfirmBeforeExecute] = useState<boolean>(() => loadConfirmBeforeExecute())
   const [autoExecuteLowRisk, setAutoExecuteLowRisk] = useState<boolean>(() => loadAutoExecuteLowRisk())
   const [autoExecutionSupported, setAutoExecutionSupported] = useState<boolean | null>(null)
   const [autoExecutionCapable, setAutoExecutionCapable] = useState(false)
-  const [workbenchOffset, setWorkbenchOffset] = useState({ x: 0, y: 0 })
+  const [workbenchGeometry, setWorkbenchGeometry] = useState<WorkbenchGeometry>(() => loadWorkbenchGeometry())
   const timelineRef = useRef<HTMLDivElement | null>(null)
   const inlineHostRef = useRef<HTMLDivElement | null>(null)
   const workbenchRef = useRef<HTMLDivElement | null>(null)
-  const workbenchOffsetRef = useRef(workbenchOffset)
+  const morePopoverRef = useRef<HTMLDivElement | null>(null)
+  const workbenchGeometryRef = useRef(workbenchGeometry)
   const workbenchDragRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null)
+  const workbenchResizeRef = useRef<WorkbenchResizeState | null>(null)
   const composingRef = useRef(false)
   const terminalPrinterRef = useRef<((content: string) => void) | null>(null)
   const printedChatCountRef = useRef(0)
+  const printedExecutionSignaturesRef = useRef<string[]>([])
   const autoExecuteLowRiskRef = useRef(autoExecuteLowRisk)
+  const pendingAgentReviewRef = useRef<PendingAgentReview | null>(null)
 
-  function moveWorkbench(x: number, y: number) {
+  function updateWorkbenchGeometry(next: WorkbenchGeometry, persist = false) {
+    workbenchGeometryRef.current = next
+    setWorkbenchGeometry(next)
+    if (persist) saveWorkbenchGeometry(next)
+  }
+
+  function resetWorkbenchGeometry() {
+    try {
+      window.localStorage.removeItem(WORKBENCH_GEOMETRY_STORAGE_KEY)
+    } catch {
+      // ignore storage errors
+    }
+    updateWorkbenchGeometry({ x: 0, y: 0 })
+    setShowMorePopover(false)
+  }
+
+  function moveWorkbench(x: number, y: number, persist = false) {
     const panel = workbenchRef.current
     const bounds = panel?.parentElement?.getBoundingClientRect()
     if (!panel || !bounds) return
-    const current = workbenchOffsetRef.current
+    const current = workbenchGeometryRef.current
     const rect = panel.getBoundingClientRect()
     const baseLeft = rect.left - current.x
     const baseTop = rect.top - current.y
     const next = {
+      ...current,
       x: Math.min(bounds.right - baseLeft - rect.width, Math.max(bounds.left - baseLeft, x)),
       y: Math.min(bounds.bottom - baseTop - rect.height, Math.max(bounds.top - baseTop, y))
     }
-    workbenchOffsetRef.current = next
-    setWorkbenchOffset(next)
+    updateWorkbenchGeometry(next, persist)
   }
 
   function startWorkbenchDrag(event: ReactPointerEvent<HTMLElement>) {
-    const current = workbenchOffsetRef.current
+    const current = workbenchGeometryRef.current
     workbenchDragRef.current = {
       pointerId: event.pointerId,
       x: event.clientX,
@@ -159,10 +212,62 @@ export function QueryPage(props: {
     if (workbenchDragRef.current?.pointerId !== event.pointerId) return
     workbenchDragRef.current = null
     event.currentTarget.releasePointerCapture(event.pointerId)
+    saveWorkbenchGeometry(workbenchGeometryRef.current)
   }
 
-  const liveAssistantText = isStreaming ? (streamingText.trim() || 'AI 正在分析中...') : ''
-  const activeCommandText = (isStreaming ? streamingText : commandInput).trim()
+  function startWorkbenchResize(event: ReactPointerEvent<HTMLElement>, direction: WorkbenchResizeDirection) {
+    const panel = workbenchRef.current
+    const bounds = panel?.parentElement?.getBoundingClientRect()
+    if (!panel || !bounds) return
+    event.preventDefault()
+    event.stopPropagation()
+    workbenchResizeRef.current = {
+      pointerId: event.pointerId,
+      direction,
+      x: event.clientX,
+      y: event.clientY,
+      rect: snapshotRect(panel.getBoundingClientRect()),
+      bounds: snapshotRect(bounds),
+      geometry: workbenchGeometryRef.current
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  function resizeWorkbench(event: ReactPointerEvent<HTMLElement>) {
+    const resize = workbenchResizeRef.current
+    if (!resize || resize.pointerId !== event.pointerId) return
+    updateWorkbenchGeometry(calculateWorkbenchResize(resize, event.clientX, event.clientY))
+  }
+
+  function stopWorkbenchResize(event: ReactPointerEvent<HTMLElement>) {
+    if (workbenchResizeRef.current?.pointerId !== event.pointerId) return
+    workbenchResizeRef.current = null
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    saveWorkbenchGeometry(workbenchGeometryRef.current)
+  }
+
+  function resizeWorkbenchWithKeyboard(event: ReactKeyboardEvent<HTMLElement>, direction: WorkbenchResizeDirection) {
+    const panel = workbenchRef.current
+    const bounds = panel?.parentElement?.getBoundingClientRect()
+    if (!panel || !bounds) return
+    const horizontal = event.key === 'ArrowLeft' ? -20 : event.key === 'ArrowRight' ? 20 : 0
+    const vertical = event.key === 'ArrowUp' ? -20 : event.key === 'ArrowDown' ? 20 : 0
+    if ((!horizontal || !/[ew]/u.test(direction)) && (!vertical || !/[ns]/u.test(direction))) return
+    event.preventDefault()
+    const resize: WorkbenchResizeState = {
+      pointerId: -1,
+      direction,
+      x: 0,
+      y: 0,
+      rect: snapshotRect(panel.getBoundingClientRect()),
+      bounds: snapshotRect(bounds),
+      geometry: workbenchGeometryRef.current
+    }
+    updateWorkbenchGeometry(calculateWorkbenchResize(resize, horizontal, vertical), true)
+  }
+
+  const liveAssistantText = isStreaming ? (streamingText.trim() || formatQueryAgentPhase(agentPhase)) : ''
+  const activeCommandText = commandInput.trim()
   const queryTerminalSessionId = useMemo(() => createQueryTerminalSessionId(selectedCommand), [selectedCommand])
   const selectedCommandRef = useRef(selectedCommand)
   const queryTerminalSessionIdRef = useRef(queryTerminalSessionId)
@@ -174,10 +279,27 @@ export function QueryPage(props: {
         at: item.at,
         role: item.role,
         content: item.content,
-        action: item.action
+        action: item.action,
+        execution: item.execution
       })),
     [chatHistory]
   )
+
+  useEffect(() => {
+    if (!active) return
+    const frame = window.requestAnimationFrame(() => {
+      const panel = workbenchRef.current
+      if (!panel) return
+      const rect = panel.getBoundingClientRect()
+      updateWorkbenchGeometry({
+        ...workbenchGeometryRef.current,
+        width: rect.width,
+        height: rect.height
+      })
+      moveWorkbench(workbenchGeometryRef.current.x, workbenchGeometryRef.current.y, true)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [active])
 
   useEffect(() => {
     try {
@@ -196,6 +318,10 @@ export function QueryPage(props: {
     }
     selectedCommandRef.current = selectedCommand
     queryTerminalSessionIdRef.current = queryTerminalSessionId
+    const pendingReview = pendingAgentReviewRef.current
+    if (pendingReview && !isCurrentExecutionTarget(pendingReview.target)) {
+      void cancelPendingAgentReview('等待确认期间会话已切换。')
+    }
   }, [queryTerminalSessionId, selectedCommand])
 
   useEffect(() => {
@@ -207,13 +333,24 @@ export function QueryPage(props: {
   }, [autoExecuteLowRisk])
 
   useEffect(() => {
-    if (!showHistoryPopover) return
+    if (!showHistoryPopover && !showMorePopover) return
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setShowHistoryPopover(false)
+      if (event.key !== 'Escape') return
+      setShowHistoryPopover(false)
+      setShowMorePopover(false)
     }
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
-  }, [showHistoryPopover])
+  }, [showHistoryPopover, showMorePopover])
+
+  useEffect(() => {
+    if (!showMorePopover) return
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!morePopoverRef.current?.contains(event.target as Node)) setShowMorePopover(false)
+    }
+    window.addEventListener('pointerdown', handlePointerDown)
+    return () => window.removeEventListener('pointerdown', handlePointerDown)
+  }, [showMorePopover])
 
   useEffect(() => {
     if (!autoFollowTimeline) return
@@ -232,6 +369,7 @@ export function QueryPage(props: {
       terminalPrinterRef.current = printer
       if (printer) {
         printedChatCountRef.current = chatHistory.length
+        printedExecutionSignaturesRef.current = chatHistory.map(executionSignature)
       }
     },
     onStatusChange: setTerminalSessionState,
@@ -245,19 +383,26 @@ export function QueryPage(props: {
   useEffect(() => {
     const printer = terminalPrinterRef.current
     if (!printer) return
-    const start = printedChatCountRef.current
-    if (chatHistory.length <= start) return
-    const newEntries = chatHistory.slice(start)
-    newEntries.forEach((entry) => {
-      const line = formatTimelineTerminalLine(entry.role, entry.content, entry.at)
-      if (!line) return
-      printer(line)
+    if (chatHistory.length < printedChatCountRef.current) {
+      printedChatCountRef.current = 0
+      printedExecutionSignaturesRef.current = []
+    }
+    const newEntries = chatHistory.slice(printedChatCountRef.current)
+    newEntries.forEach((entry) => printer(formatTimelineTerminalLines(entry)))
+    chatHistory.slice(0, printedChatCountRef.current).forEach((entry, index) => {
+      const signature = executionSignature(entry)
+      if (signature !== printedExecutionSignaturesRef.current[index]) {
+        printer(formatTerminalExecutionLine(entry))
+      }
     })
     printedChatCountRef.current = chatHistory.length
+    printedExecutionSignaturesRef.current = chatHistory.map(executionSignature)
   }, [chatHistory])
 
   async function handleTranslate(): Promise<boolean> {
     if (!queryInput.trim() || isStreaming) return false
+    const submittedInput = queryInput
+    setQueryInput('')
     try {
       const commandName = selectedCommandRef.current
       const sessionId = queryTerminalSessionIdRef.current
@@ -265,11 +410,6 @@ export function QueryPage(props: {
       const terminalSnapshot = commandName
         ? await window.api.terminalGetBuffer(commandName, { sessionId })
         : undefined
-      if (autoExecuteLowRiskRef.current && commandName && !terminalSnapshot?.autoExecutionCapable) {
-        onTrackAction?.('query.ai.translate', 'click', 'fail')
-        onActionError('自动执行的安全会话正在准备，请稍后再试。')
-        return false
-      }
       onTrackAction?.('query.ai.translate', 'click', 'success')
       const requestTarget = {
         commandName,
@@ -278,20 +418,36 @@ export function QueryPage(props: {
         autoExecutionCapable: terminalSnapshot?.autoExecutionCapable,
         selectionEpoch
       }
-      const result = await translate({
+      await translate({
         sessionLogs: buildTerminalContextLines(terminalSnapshot?.text || ''),
         terminalSessionId: sessionId,
-        terminalInstanceId: terminalSnapshot?.instanceId
+        terminalInstanceId: terminalSnapshot?.instanceId,
+        shouldContinue: () => isCurrentExecutionTarget(requestTarget),
+        executeCommand: (response) => handleAutoExecute(response.action, requestTarget, response.autoExecutionToken),
+        reviewCommand: (request) => waitForAgentReview(request, requestTarget)
       })
-      if (result?.action.type === 'command') {
-        await handleAutoExecute(result.action, requestTarget, result.autoExecutionToken)
-      }
       return true
     } catch (error) {
+      setQueryInput(submittedInput)
       onTrackAction?.('query.ai.translate', 'click', 'fail')
       onActionError(error instanceof Error ? error.message : String(error))
       return false
     }
+  }
+
+  async function handleCancelAgent(): Promise<void> {
+    executionTargetEpochRef.current += 1
+    const pendingInterrupt = cancelPendingAgentReview('用户取消了等待确认的命令。')
+    const commandName = selectedCommandRef.current
+    const sessionId = queryTerminalSessionIdRef.current
+    const tasks: Array<Promise<unknown>> = [cancel()]
+    if (pendingInterrupt) {
+      tasks.push(pendingInterrupt)
+    } else if (agentPhase === 'executing' && commandName) {
+      tasks.push(window.api.terminalInput(commandName, '\u0003', { source: QUERY_TERMINAL_SOURCE, sessionId }))
+    }
+    await Promise.allSettled(tasks)
+    onTrackAction?.('query.ai.cancel', 'click', 'success')
   }
 
   async function handleRunDraftCommand(
@@ -300,119 +456,216 @@ export function QueryPage(props: {
     expectedTarget?: QueryExecutionTarget,
     shouldContinue?: () => boolean,
     autoExecutionToken?: string
-  ): Promise<boolean> {
-    const commandToRun = (commandOverride ?? activeCommandText).trim()
-    const currentCommandName = expectedTarget?.commandName || selectedCommandRef.current
-    const currentSessionId = expectedTarget?.sessionId || queryTerminalSessionIdRef.current
-    if ((expectedTarget && !isCurrentExecutionTarget(expectedTarget)) || (shouldContinue && !shouldContinue())) return false
+  ): Promise<DraftCommandExecutionResult> {
+    const pendingReview = source === QUERY_TERMINAL_SOURCE ? pendingAgentReviewRef.current : null
+    const executionTarget = pendingReview?.target || expectedTarget
+    const commandToRun = (pendingReview?.request.command || commandOverride || activeCommandText).trim()
+    const currentCommandName = executionTarget?.commandName || selectedCommandRef.current
+    const currentSessionId = executionTarget?.sessionId || queryTerminalSessionIdRef.current
+    if ((executionTarget && !isCurrentExecutionTarget(executionTarget)) || (shouldContinue && !shouldContinue())) {
+      return { ok: false, status: 'cancelled', message: '执行目标已变化。' }
+    }
     if (!currentCommandName) {
-      onActionError('请先选择会话命令。')
-      return false
+      const message = '请先选择会话命令。'
+      onActionError(message)
+      return { ok: false, status: 'failed', message }
     }
     if (!commandToRun) {
-      onActionError('请先生成或填写待执行命令。')
-      return false
+      const message = '请先生成或填写待执行命令。'
+      onActionError(message)
+      return { ok: false, status: 'failed', message }
     }
     try {
       const featureKey = source === QUERY_AUTO_TERMINAL_SOURCE ? 'query.command.auto_execute' : 'query.command.execute'
-      if (source !== QUERY_AUTO_TERMINAL_SOURCE) {
+      if (source !== QUERY_AUTO_TERMINAL_SOURCE && !pendingReview) {
         await window.api.terminalStart(currentCommandName, { source, sessionId: currentSessionId })
       } else if (!expectedTarget?.instanceId) {
-        return false
+        if (!pendingReview?.target.instanceId) {
+          return { ok: false, status: 'cancelled', message: '终端会话尚未就绪。' }
+        }
       }
-      if ((expectedTarget && !isCurrentExecutionTarget(expectedTarget)) || (shouldContinue && !shouldContinue())) return false
+      if ((executionTarget && !isCurrentExecutionTarget(executionTarget)) || (shouldContinue && !shouldContinue())) {
+        return { ok: false, status: 'cancelled', message: '执行目标已变化。' }
+      }
+      if (pendingReview?.executing) {
+        return { ok: false, status: 'waiting_for_review', message: '人工确认命令正在执行。' }
+      }
+      const before = pendingReview
+        ? await window.api.terminalGetBuffer(currentCommandName, { sessionId: currentSessionId })
+        : undefined
+      if (pendingReview) {
+        if (
+          pendingAgentReviewRef.current !== pendingReview ||
+          !isCurrentExecutionTarget(pendingReview.target) ||
+          (shouldContinue && !shouldContinue())
+        ) {
+          return { ok: false, status: 'cancelled', message: '执行目标已变化。' }
+        }
+        if (pendingReview.executing) {
+          return { ok: false, status: 'waiting_for_review', message: '人工确认命令正在执行。' }
+        }
+        pendingReview.executing = true
+      }
       const result = await window.api.terminalInput(currentCommandName, `${commandToRun}\n`, {
         source,
         sessionId: currentSessionId,
-        expectedInstanceId: source === QUERY_AUTO_TERMINAL_SOURCE ? expectedTarget?.instanceId : undefined,
-        autoExecutionToken: source === QUERY_AUTO_TERMINAL_SOURCE ? autoExecutionToken : undefined
+        expectedInstanceId: executionTarget?.instanceId,
+        autoExecutionToken: source === QUERY_AUTO_TERMINAL_SOURCE ? autoExecutionToken : undefined,
+        awaitCompletion: Boolean(pendingReview)
       })
-      if (!result.ok) throw new Error(result.message || '命令未通过执行检查。')
+      if (!result.ok) {
+        const message = result.message || '命令未通过执行检查。'
+        const status = result.executionFailed ? 'failed' : 'waiting_for_review'
+        onTrackAction?.(featureKey, 'run', 'fail')
+        onActionError(message)
+        if (pendingReview) resolvePendingAgentReview({ status, message })
+        return { ok: false, status, message }
+      }
       onTrackAction?.(featureKey, 'run', 'success')
       setTerminalSessionState('running')
-      return true
+      if (pendingReview && before) {
+        const after = await window.api.terminalGetBuffer(currentCommandName, { sessionId: currentSessionId })
+        if (after.instanceId !== pendingReview.target.instanceId) {
+          resolvePendingAgentReview({ status: 'cancelled', message: '命令执行后终端会话发生变化。' })
+          return { ok: false, status: 'cancelled', message: '命令执行后终端会话发生变化。' }
+        }
+        const output = after.text.startsWith(before.text) ? after.text.slice(before.text.length) : after.text.slice(-12_000)
+        const outputLines = buildTerminalContextLines(output)
+        resolvePendingAgentReview({
+          status: 'completed',
+          outputLines: outputLines.length > 0 ? outputLines : ['命令执行完成，未产生可见输出。']
+        })
+      }
+      return { ok: true }
     } catch (error) {
       const featureKey = source === QUERY_AUTO_TERMINAL_SOURCE ? 'query.command.auto_execute' : 'query.command.execute'
       onTrackAction?.(featureKey, 'run', 'fail')
       onActionError(error instanceof Error ? error.message : String(error))
-      return false
+      resolvePendingAgentReview({ status: 'failed', message: error instanceof Error ? error.message : String(error) })
+      return {
+        ok: false,
+        status: 'failed',
+        message: error instanceof Error ? error.message : String(error)
+      }
     }
+  }
+
+  function waitForAgentReview(
+    request: QueryAgentReviewRequest,
+    target: QueryExecutionTarget
+  ): Promise<QueryAgentExecutionResult> {
+    resolvePendingAgentReview({ status: 'cancelled', message: '已有新的命令等待确认。' })
+    setCommandInput(request.command)
+    return new Promise((resolve) => {
+      pendingAgentReviewRef.current = { request, target, executing: false, resolve }
+    })
+  }
+
+  function resolvePendingAgentReview(result: QueryAgentExecutionResult): void {
+    const pendingReview = pendingAgentReviewRef.current
+    if (!pendingReview) return
+    pendingAgentReviewRef.current = null
+    pendingReview.resolve(result)
+  }
+
+  function cancelPendingAgentReview(message: string): Promise<unknown> | undefined {
+    const pendingReview = pendingAgentReviewRef.current
+    if (!pendingReview) return undefined
+    resolvePendingAgentReview({ status: 'cancelled', message })
+    if (!pendingReview.executing) return undefined
+    return window.api.terminalInput(pendingReview.target.commandName, '\u0003', {
+      source: QUERY_TERMINAL_SOURCE,
+      sessionId: pendingReview.target.sessionId,
+      expectedInstanceId: pendingReview.target.instanceId
+    })
   }
 
   async function handleAutoExecute(
     action: QueryAiAction,
     requestTarget: QueryExecutionTarget,
     autoExecutionToken?: string
-  ): Promise<void> {
+  ): Promise<QueryAgentExecutionResult> {
     const command = (action.command || '').trim()
-    if (!autoExecuteLowRiskRef.current || !command) return
+    if (!command) return { status: 'failed', message: 'Agent 未提供可执行命令。' }
+    let assessment: Awaited<ReturnType<typeof window.api.queryAssessAutoExecution>>
+    try {
+      assessment = await window.api.queryAssessAutoExecution(command, autoExecutionToken)
+    } catch {
+      onTrackAction?.('query.command.auto_execute', 'risk_check', 'fail')
+      return { status: 'waiting_for_review', message: '安全检查暂不可用，命令未执行。' }
+    }
+    if (!autoExecuteLowRiskRef.current) {
+      return { status: 'waiting_for_review', message: '自动执行已关闭，命令等待人工确认。' }
+    }
     if (action.riskLevel !== 'safe') {
-      terminalPrinterRef.current?.(
-        formatTerminalEventLine('AUTO', `已跳过 · ${action.riskReason || 'AI 未将该命令判定为低风险。'}`, 'warning')
-      )
       onTrackAction?.('query.command.auto_execute', `skip_agent_${action.riskLevel}`, 'unknown')
-      return
+      return { status: 'waiting_for_review', message: action.riskReason || '命令需要人工确认。' }
     }
     if (!requestTarget.commandName) {
-      terminalPrinterRef.current?.(
-        formatTerminalEventLine('AUTO', '已跳过 · 未选择会话，命令已保留并等待手动执行。', 'warning')
-      )
       onTrackAction?.('query.command.auto_execute', 'skip_no_session', 'unknown')
-      return
+      return { status: 'waiting_for_review', message: '未选择可执行命令的会话。' }
     }
     if (!requestTarget.instanceId) {
-      terminalPrinterRef.current?.(
-        formatTerminalEventLine('AUTO', '已跳过 · 终端会话尚未就绪，命令已保留并等待手动执行。', 'warning')
-      )
       onTrackAction?.('query.command.auto_execute', 'skip_session_not_ready', 'unknown')
-      return
+      return { status: 'waiting_for_review', message: '终端会话尚未就绪。' }
     }
     if (!requestTarget.autoExecutionCapable) {
-      terminalPrinterRef.current?.(
-        formatTerminalEventLine('AUTO', '已跳过 · 当前会话未启用可信的自动执行，命令已保留并等待手动确认。', 'warning')
-      )
       onTrackAction?.('query.command.auto_execute', 'skip_session_unsupported', 'unknown')
-      return
+      return { status: 'waiting_for_review', message: '当前会话不能可信地自动执行。' }
     }
     if (!isCurrentExecutionTarget(requestTarget)) {
-      terminalPrinterRef.current?.(
-        formatTerminalEventLine('AUTO', '已跳过 · AI 生成期间会话已切换，命令已保留并等待手动执行。', 'warning')
-      )
       onTrackAction?.('query.command.auto_execute', 'skip_session_changed', 'unknown')
-      return
+      return { status: 'cancelled', message: 'AI 生成期间会话已切换。' }
     }
     try {
-      const assessment = await window.api.queryAssessAutoExecution(command, autoExecutionToken)
-      if (!autoExecuteLowRiskRef.current) return
+      if (!autoExecuteLowRiskRef.current) {
+        return { status: 'cancelled', message: '自动执行已关闭。' }
+      }
       if (!isCurrentExecutionTarget(requestTarget)) {
-        terminalPrinterRef.current?.(
-          formatTerminalEventLine('AUTO', '已跳过 · AI 生成期间会话已切换，命令已保留并等待手动执行。', 'warning')
-        )
         onTrackAction?.('query.command.auto_execute', 'skip_session_changed', 'unknown')
-        return
+        return { status: 'cancelled', message: 'AI 生成期间会话已切换。' }
       }
       if (!assessment.canAutoExecute) {
-        terminalPrinterRef.current?.(formatTerminalEventLine('AUTO', `已跳过 · ${assessment.message}`, 'warning'))
         onTrackAction?.('query.command.auto_execute', `skip_${assessment.riskLevel}`, 'unknown')
-        return
+        return { status: 'waiting_for_review', message: assessment.message }
       }
-      const executed = await handleRunDraftCommand(
+      const before = await window.api.terminalGetBuffer(requestTarget.commandName, { sessionId: requestTarget.sessionId })
+      const execution = await handleRunDraftCommand(
         command,
         QUERY_AUTO_TERMINAL_SOURCE,
         requestTarget,
         () => autoExecuteLowRiskRef.current && isCurrentExecutionTarget(requestTarget),
         autoExecutionToken
       )
-      if (executed) {
-        terminalPrinterRef.current?.(
-          formatTerminalEventLine('AUTO', `已执行 · Agent 判定低风险，本地危险规则未命中\n${command}`, 'success')
-        )
+      if (execution.ok) {
+        const after = await window.api.terminalGetBuffer(requestTarget.commandName, { sessionId: requestTarget.sessionId })
+        if (!isCurrentExecutionTarget(requestTarget) || after.instanceId !== requestTarget.instanceId) {
+          return { status: 'cancelled', message: '命令执行后终端会话发生变化。' }
+        }
+        requestTarget.autoExecutionCapable = after.autoExecutionCapable
+        const output = after.text.startsWith(before.text) ? after.text.slice(before.text.length) : after.text.slice(-12_000)
+        const outputLines = buildTerminalContextLines(output)
+        return {
+          status: 'completed',
+          outputLines: outputLines.length > 0 ? outputLines : ['命令执行完成，未产生可见输出。']
+        }
+      }
+      if (!execution.ok && execution.status === 'failed') {
+        return { status: 'failed', message: execution.message }
+      }
+      if (!execution.ok && execution.status === 'cancelled') {
+        return { status: 'cancelled', message: execution.message }
+      }
+      if (!autoExecuteLowRiskRef.current || !isCurrentExecutionTarget(requestTarget)) {
+        return { status: 'cancelled', message: '自动执行已取消。' }
+      }
+      return {
+        status: 'waiting_for_review',
+        message: execution.ok ? '命令未通过执行边界检查。' : execution.message
       }
     } catch {
-      terminalPrinterRef.current?.(
-        formatTerminalEventLine('AUTO', '已取消 · 安全检查暂不可用，命令未执行。', 'danger')
-      )
       onTrackAction?.('query.command.auto_execute', 'risk_check', 'fail')
+      return { status: 'waiting_for_review', message: '安全检查暂不可用，命令未执行。' }
     }
   }
 
@@ -500,6 +753,16 @@ export function QueryPage(props: {
           >
             <div style={{ marginBottom: 2, fontSize: 10, color: 'var(--muted)' }}>{entry.role === 'user' ? '我' : 'AI'}</div>
             {entry.content}
+            {entry.execution ? (
+              <div className="query-history-command">
+                <div className="query-history-command-header">
+                  <span>CMD</span>
+                  <span data-status={entry.execution.status}>{queryExecutionStatusLabel(entry.execution.status)}</span>
+                </div>
+                <code>{entry.execution.command}</code>
+                {entry.execution.message ? <small>{entry.execution.message}</small> : null}
+              </div>
+            ) : null}
           </div>
         ))}
         {liveAssistantText ? (
@@ -562,6 +825,40 @@ export function QueryPage(props: {
         </div>
         <div className="query-terminal-surface">
           <div ref={inlineHostRef} style={{ height: '100%', width: '100%' }} />
+          {!selectedCommand || terminalSessionState !== 'running' ? (
+            <div data-testid="log-analysis-connection-guide" className="query-connection-guide" role="region" aria-label="服务器连接引导">
+              <div className="query-connection-guide-icon" aria-hidden="true">
+                <TerminalIcon size={24} />
+              </div>
+              <div className="query-connection-guide-title">
+                {!selectedCommand
+                  ? '尚未连接服务器'
+                  : terminalSessionState === 'connecting'
+                    ? '正在连接服务器'
+                    : '服务器会话已断开'}
+              </div>
+              <div className="query-connection-guide-description">
+                {selectedCommand
+                  ? `“${selectedCommand}”尚未建立连接，可切换其他会话后重试。`
+                  : commands.length > 0
+                  ? '选择一个会话命令，连接后即可查看输出并使用 AI 查日志。'
+                  : '暂无可用的会话命令，请先在首页添加终端模式命令。'}
+              </div>
+              {commands.length > 0 ? (
+                <select
+                  data-testid="log-analysis-guide-command-select"
+                  aria-label="选择要连接的服务器会话"
+                  defaultValue=""
+                  onChange={(event) => selectCommand(event.target.value)}
+                >
+                  <option value="" disabled>选择服务器会话…</option>
+                  {commands.map((cmd) => (
+                    <option key={cmd.name} value={cmd.name}>{cmd.name}</option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+          ) : null}
           <div data-testid="log-analysis-floating-console" className="query-floating-shell">
             {showHistoryPopover ? (
               <div
@@ -570,7 +867,6 @@ export function QueryPage(props: {
                 aria-label="历史对话"
                 data-testid="log-analysis-history-popover"
                 className="ui-popover query-history-popover"
-                style={{ transform: `translate(${workbenchOffset.x}px, ${workbenchOffset.y}px)` }}
               >
                 <div className="query-history-header">
                   <div style={{ fontSize: 14, fontWeight: 650 }}>历史对话</div>
@@ -614,7 +910,11 @@ export function QueryPage(props: {
               ref={workbenchRef}
               data-testid="log-analysis-workbench"
               className="query-floating-console"
-              style={{ transform: `translate(calc(-50% + ${workbenchOffset.x}px), ${workbenchOffset.y}px)` }}
+              style={{
+                width: workbenchGeometry.width,
+                height: workbenchGeometry.height,
+                transform: `translate(calc(-50% + ${workbenchGeometry.x}px), ${workbenchGeometry.y}px)`
+              }}
             >
               <div className="query-floating-toolbar">
                 <div className="query-mode-switch" role="tablist" aria-label="AI 操作模式">
@@ -651,20 +951,26 @@ export function QueryPage(props: {
                   onPointerCancel={stopWorkbenchDrag}
                   onKeyDown={(event) => {
                     const step = 20
-                    if (event.key === 'ArrowLeft') moveWorkbench(workbenchOffsetRef.current.x - step, workbenchOffsetRef.current.y)
-                    else if (event.key === 'ArrowRight') moveWorkbench(workbenchOffsetRef.current.x + step, workbenchOffsetRef.current.y)
-                    else if (event.key === 'ArrowUp') moveWorkbench(workbenchOffsetRef.current.x, workbenchOffsetRef.current.y - step)
-                    else if (event.key === 'ArrowDown') moveWorkbench(workbenchOffsetRef.current.x, workbenchOffsetRef.current.y + step)
+                    if (event.key === 'ArrowLeft') moveWorkbench(workbenchGeometryRef.current.x - step, workbenchGeometryRef.current.y, true)
+                    else if (event.key === 'ArrowRight') moveWorkbench(workbenchGeometryRef.current.x + step, workbenchGeometryRef.current.y, true)
+                    else if (event.key === 'ArrowUp') moveWorkbench(workbenchGeometryRef.current.x, workbenchGeometryRef.current.y - step, true)
+                    else if (event.key === 'ArrowDown') moveWorkbench(workbenchGeometryRef.current.x, workbenchGeometryRef.current.y + step, true)
                     else return
                     event.preventDefault()
                   }}
                 />
                 <div className="query-floating-actions">
                   <label data-testid="log-analysis-session-picker" className="query-floating-session">
-                    <span>会话</span>
+                    <span
+                      className="query-floating-session-status"
+                      aria-hidden="true"
+                      title={terminalSessionState === 'running' ? '运行中' : '空闲'}
+                    >
+                      <span className={terminalSessionState === 'running' ? 'query-status-dot is-running' : 'query-status-dot'} />
+                    </span>
                     <select
                       data-testid="log-analysis-command-select"
-                      aria-label="选择会话命令"
+                      aria-label={`选择命令，当前状态：${terminalSessionState === 'running' ? '运行中' : '空闲'}`}
                       value={selectedCommand}
                       onChange={(event) => selectCommand(event.target.value)}
                       style={selectStyle}
@@ -677,48 +983,77 @@ export function QueryPage(props: {
                       ))}
                     </select>
                   </label>
-                  <div className="query-session-state">
-                    <span className={terminalSessionState === 'running' ? 'query-status-dot is-running' : 'query-status-dot'} />
-                    {terminalSessionState === 'running' ? '运行中' : '空闲'}
+                  <div ref={morePopoverRef} className="query-more">
+                    <button
+                      type="button"
+                      data-testid="log-analysis-more"
+                      aria-label="更多操作"
+                      aria-expanded={showMorePopover}
+                      aria-controls="log-analysis-more-popover"
+                      onClick={() => setShowMorePopover((prev) => !prev)}
+                      style={compactButtonStyle('muted')}
+                    >
+                      更多
+                    </button>
+                    {showMorePopover ? (
+                      <div
+                        id="log-analysis-more-popover"
+                        role="dialog"
+                        aria-label="更多操作"
+                        data-testid="log-analysis-more-popover"
+                        className="ui-popover query-more-popover"
+                      >
+                        <button
+                          type="button"
+                          aria-label="历史对话"
+                          data-testid="log-analysis-open-history"
+                          aria-expanded={showHistoryPopover}
+                          aria-controls="log-analysis-history-popover"
+                          className="query-more-history"
+                          onClick={() => {
+                            setShowMorePopover(false)
+                            setShowHistoryPopover(true)
+                          }}
+                        >
+                          历史对话
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="log-analysis-reset-workbench"
+                          className="query-more-history"
+                          onClick={resetWorkbenchGeometry}
+                        >
+                          恢复默认布局
+                        </button>
+                        <label
+                          data-testid="log-analysis-auto-execute-toggle"
+                          className="query-auto-execute-toggle query-more-auto-execute"
+                          title="AI 回复完成后，仅在会话状态可验证时自动执行候选命令；其余命令会保留，等待你确认。"
+                        >
+                          <input
+                            type="checkbox"
+                            role="switch"
+                            aria-label="自动执行候选命令"
+                            data-testid="log-analysis-auto-execute-low-risk"
+                            checked={autoExecuteLowRisk}
+                            disabled={autoExecutionSupported === false}
+                            onChange={toggleAutoExecuteLowRisk}
+                          />
+                          <span className="query-auto-execute-track" aria-hidden="true" />
+                          <span className="query-auto-execute-copy">
+                            <strong>自动执行</strong>
+                            <small>
+                              {autoExecutionSupported === false
+                                ? '当前会话不支持'
+                                : autoExecuteLowRisk && !autoExecutionCapable
+                                  ? '正在准备安全会话'
+                                  : '仅限自动执行候选命令'}
+                            </small>
+                          </span>
+                        </label>
+                      </div>
+                    ) : null}
                   </div>
-                  <button
-                    type="button"
-                    aria-label="历史对话"
-                    title="历史对话"
-                    data-testid="log-analysis-open-history"
-                    aria-expanded={showHistoryPopover}
-                    aria-controls="log-analysis-history-popover"
-                    onClick={() => setShowHistoryPopover((prev) => !prev)}
-                    style={compactButtonStyle('muted')}
-                  >
-                    历史对话
-                  </button>
-                  <label
-                    data-testid="log-analysis-auto-execute-toggle"
-                    className="query-auto-execute-toggle"
-                    title="AI 回复完成后，仅在会话状态可验证时自动执行判定为低风险的命令；其余命令会保留，等待你确认。"
-                  >
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      aria-label="自动执行低风险命令"
-                      data-testid="log-analysis-auto-execute-low-risk"
-                      checked={autoExecuteLowRisk}
-                      disabled={autoExecutionSupported === false}
-                      onChange={toggleAutoExecuteLowRisk}
-                    />
-                    <span className="query-auto-execute-track" aria-hidden="true" />
-                    <span className="query-auto-execute-copy">
-                      <strong>自动执行</strong>
-                      <small>
-                        {autoExecutionSupported === false
-                          ? '当前会话不支持'
-                          : autoExecuteLowRisk && !autoExecutionCapable
-                            ? '正在准备安全会话'
-                            : '仅限低风险命令'}
-                      </small>
-                    </span>
-                  </label>
                 </div>
               </div>
 
@@ -729,7 +1064,7 @@ export function QueryPage(props: {
                     style={{
                       ...inputStyle,
                       marginTop: 0,
-                      minHeight: 104,
+                      minHeight: 0,
                       resize: 'none',
                       lineHeight: 1.45,
                       background: 'var(--panel)',
@@ -756,20 +1091,19 @@ export function QueryPage(props: {
                           (native as unknown as { keyCode?: number }).keyCode === 229
                         if (isImeComposing) return
                         event.preventDefault()
-                        const sent = await handleTranslate()
-                        if (sent) setQueryInput('')
+                        await handleTranslate()
                       }
                     }}
                   />
                   <button
                     type="button"
-                    aria-label="发送"
+                    aria-label={isStreaming ? '取消本轮查询' : '发送'}
                     data-testid="log-analysis-translate"
-                    onClick={handleTranslate}
-                    disabled={isStreaming || !queryInput.trim()}
+                    onClick={() => void (isStreaming ? handleCancelAgent() : handleTranslate())}
+                    disabled={!isStreaming && !queryInput.trim()}
                     className="query-floating-primary"
                   >
-                    {isStreaming ? '分析中...' : '询问 AI'}
+                    {isStreaming ? '取消' : '询问 AI'}
                   </button>
                   <div className="query-floating-hint">Enter 发送 · Shift+Enter 换行</div>
                 </div>
@@ -779,9 +1113,10 @@ export function QueryPage(props: {
                     data-testid="log-analysis-command-input"
                     value={commandInput}
                     onChange={(event) => setCommandInput(event.target.value)}
+                    readOnly={agentPhase === 'waiting_for_review'}
                     placeholder="例如：grep -i error app.log | tail -n 50"
                     style={{
-                      minHeight: 104,
+                      minHeight: 0,
                       width: '100%',
                       resize: 'none',
                       border: '1px solid var(--border-default)',
@@ -803,9 +1138,27 @@ export function QueryPage(props: {
                   >
                     执行命令
                   </button>
-                  <div className="query-floating-hint">{activeCommandText.length}/2000 · 执行前可继续编辑</div>
+                  <div className="query-floating-hint">
+                    {activeCommandText.length}/2000 · {agentPhase === 'waiting_for_review' ? '待确认命令不可修改' : '执行前可继续编辑'}
+                  </div>
                 </div>
               )}
+              {WORKBENCH_RESIZE_DIRECTIONS.map((direction) => (
+                <span
+                  key={direction}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`调整 AI 工作台${resizeDirectionLabel(direction)}边缘`}
+                  data-testid={`log-analysis-workbench-resize-${direction}`}
+                  data-direction={direction}
+                  className="query-resize-handle"
+                  onPointerDown={(event) => startWorkbenchResize(event, direction)}
+                  onPointerMove={resizeWorkbench}
+                  onPointerUp={stopWorkbenchResize}
+                  onPointerCancel={stopWorkbenchResize}
+                  onKeyDown={(event) => resizeWorkbenchWithKeyboard(event, direction)}
+                />
+              ))}
             </div>
           </div>
         </div>
@@ -898,6 +1251,16 @@ export function QueryPage(props: {
   )
 }
 
+function formatQueryAgentPhase(phase: QueryAgentPhase | null): string {
+  if (phase === 'assessing_risk') return '正在判断命令风险...'
+  if (phase === 'executing') return '正在执行查询命令...'
+  if (phase === 'analyzing_result') return '正在分析查询结果...'
+  if (phase === 'waiting_for_review') return '命令需要人工确认。'
+  if (phase === 'cancelled') return '本轮查询已取消。'
+  if (phase === 'failed') return '本轮查询失败。'
+  return '正在生成查询...'
+}
+
 function useTerminalSession(args: {
   hostRef: React.RefObject<HTMLDivElement | null>
   commandName: string
@@ -905,7 +1268,7 @@ function useTerminalSession(args: {
   enabled: boolean
   autoExecutionEnabled: boolean
   onTerminalReady?: (printer: ((content: string) => void) | null) => void
-  onStatusChange: (state: 'running' | 'idle') => void
+  onStatusChange: (state: 'connecting' | 'running' | 'idle') => void
   onAutoExecutionCapabilityChange: (capability: AutoExecutionCapability) => void
   onActionError: (message: string) => void
 }) {
@@ -973,9 +1336,7 @@ function useTerminalSession(args: {
     terminal.open(host)
     terminalRef.current = terminal
     fitAddonRef.current = fitAddon
-    terminalReadyRef.current?.((content) => {
-      terminalRef.current?.write(content)
-    })
+    terminalReadyRef.current?.((content) => terminalRef.current?.write(content))
 
     const onResize = () => {
       const t = terminalRef.current
@@ -1128,6 +1489,7 @@ function useTerminalSession(args: {
       return result
     }
 
+    statusChangeRef.current('connecting')
     void connect()
       .then((result) => {
         if (activeCommandRef.current !== commandName) return
@@ -1153,6 +1515,7 @@ function useTerminalSession(args: {
       })
       .catch((error) => {
         if (activeCommandRef.current !== commandName) return
+        statusChangeRef.current('idle')
         autoExecutionCapabilityRef.current({ supported: false, capable: false })
         actionErrorRef.current(error instanceof Error ? error.message : String(error))
       })
@@ -1186,6 +1549,67 @@ function loadAutoExecuteLowRisk(): boolean {
   }
 }
 
+function loadWorkbenchGeometry(): WorkbenchGeometry {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(WORKBENCH_GEOMETRY_STORAGE_KEY) || '{}') as Partial<WorkbenchGeometry>
+    return {
+      x: finiteNumber(stored.x) ? stored.x : 0,
+      y: finiteNumber(stored.y) ? stored.y : 0,
+      width: finiteNumber(stored.width) && stored.width > 0 ? stored.width : undefined,
+      height: finiteNumber(stored.height) && stored.height >= 160 ? stored.height : undefined
+    }
+  } catch {
+    return { x: 0, y: 0 }
+  }
+}
+
+function saveWorkbenchGeometry(geometry: WorkbenchGeometry) {
+  try {
+    window.localStorage.setItem(WORKBENCH_GEOMETRY_STORAGE_KEY, JSON.stringify({
+      x: Math.round(geometry.x),
+      y: Math.round(geometry.y),
+      width: geometry.width ? Math.round(geometry.width) : undefined,
+      height: geometry.height ? Math.round(geometry.height) : undefined
+    }))
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function finiteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function snapshotRect(rect: DOMRect): RectSnapshot {
+  return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width, height: rect.height }
+}
+
+function calculateWorkbenchResize(resize: WorkbenchResizeState, clientX: number, clientY: number): WorkbenchGeometry {
+  const dx = clientX - resize.x
+  const dy = clientY - resize.y
+  const minWidth = 1
+  const minHeight = Math.min(200, resize.bounds.height)
+  let { top, right, bottom, left } = resize.rect
+
+  if (resize.direction.includes('e')) right = Math.min(resize.bounds.right, Math.max(left + minWidth, right + dx))
+  if (resize.direction.includes('w')) left = Math.max(resize.bounds.left, Math.min(right - minWidth, left + dx))
+  if (resize.direction.includes('s')) bottom = Math.min(resize.bounds.bottom, Math.max(top + minHeight, bottom + dy))
+  if (resize.direction.includes('n')) top = Math.max(resize.bounds.top, Math.min(bottom - minHeight, top + dy))
+
+  const width = right - left
+  const height = bottom - top
+  return {
+    x: resize.geometry.x + left - resize.rect.left + (width - resize.rect.width) / 2,
+    y: resize.geometry.y + top - resize.rect.top + height - resize.rect.height,
+    width,
+    height
+  }
+}
+
+function resizeDirectionLabel(direction: WorkbenchResizeDirection): string {
+  return direction.replace('n', '上').replace('s', '下').replace('e', '右').replace('w', '左')
+}
+
 function SessionBadge(props: { state: 'running' | 'idle_with_cache' | 'idle_empty' }) {
   const { state } = props
   const meta =
@@ -1213,23 +1637,59 @@ function SessionBadge(props: { state: 'running' | 'idle_with_cache' | 'idle_empt
   )
 }
 
-function formatTimelineTerminalLine(role: 'user' | 'assistant', content: string, at: number): string {
-  const text = content.trim()
-  if (!text) return ''
-  return formatTerminalTuiEntry({
-    at,
-    label: role === 'user' ? 'YOU' : 'AI',
-    tone: role,
-    content: text
-  })
-}
-
 function createQueryTerminalSessionId(commandName: string): string {
   const normalized = commandName.trim()
   if (!normalized) return ''
   return `${QUERY_TERMINAL_SESSION_PREFIX}:${normalized}`
 }
 
-function formatTerminalEventLine(label: string, content: string, tone: TerminalTuiTone): string {
-  return formatTerminalTuiEntry({ at: Date.now(), label, tone, content })
+function formatTimelineTerminalLines(entry: QueryAiHistoryItem & { at: number }): string {
+  if (entry.role === 'user') {
+    return formatTerminalTuiEntry({ at: entry.at, label: 'YOU', tone: 'user', content: entry.content })
+  }
+
+  const lines = [formatTerminalTuiEntry({ at: entry.at, label: 'AI', tone: 'assistant', content: entry.content })]
+  if (entry.action?.type === 'command' && entry.action.command?.trim()) {
+    const tone: TerminalTuiTone = entry.action.riskLevel === 'blocked'
+      ? 'danger'
+      : entry.action.riskLevel === 'review'
+        ? 'warning'
+        : 'success'
+    lines.push(formatTerminalTuiEntry({ at: entry.at, label: 'AI Command', tone, content: entry.action.command }))
+    if (entry.action.riskLevel !== 'safe') {
+      lines.push(formatTerminalTuiEntry({
+        at: entry.at,
+        label: '风险',
+        tone,
+        content: entry.action.riskReason || '命令需要人工确认。'
+      }))
+    }
+  }
+  lines.push(formatTerminalExecutionLine(entry))
+  return lines.join('')
+}
+
+function formatTerminalExecutionLine(entry: QueryAiHistoryItem & { at: number }): string {
+  const execution = entry.execution
+  if (!execution || !['waiting_for_review', 'failed', 'cancelled'].includes(execution.status)) return ''
+  return formatTerminalTuiEntry({
+    at: entry.at,
+    label: queryExecutionStatusLabel(execution.status),
+    tone: execution.status === 'waiting_for_review' ? 'warning' : 'danger',
+    content: execution.message || '命令未执行。'
+  })
+}
+
+function executionSignature(entry: QueryAiHistoryItem & { at: number }): string {
+  const execution = entry.execution
+  return execution ? `${execution.status}\u0000${execution.message || ''}` : ''
+}
+
+function queryExecutionStatusLabel(status: NonNullable<QueryAiHistoryItem['execution']>['status']): string {
+  if (status === 'pending') return '等待执行'
+  if (status === 'running') return '执行中'
+  if (status === 'completed') return '执行完成'
+  if (status === 'waiting_for_review') return '等待确认'
+  if (status === 'cancelled') return '已取消'
+  return '执行失败'
 }

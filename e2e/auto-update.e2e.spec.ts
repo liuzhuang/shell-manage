@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { setElectronViewportSize } from './helpers/electron-viewport'
 
 const appEntry = join(process.cwd(), 'dist/main/index.js')
 
@@ -65,7 +66,7 @@ test('macOS 客户端可检查、下载并进入自动安装流程', async () =>
 
 async function launchWithHome(homeDir: string, extraEnv: Record<string, string>): Promise<void> {
   electronApp = await electron.launch({
-    args: [appEntry],
+    args: [appEntry, '-ApplePersistenceIgnoreState', 'YES'],
     env: {
       ...process.env,
       SHELL_MANAGE_HOME: homeDir,
@@ -74,5 +75,6 @@ async function launchWithHome(homeDir: string, extraEnv: Record<string, string>)
   })
   page = await electronApp.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  await setElectronViewportSize(page)
   await expect(page.getByTestId('home-page')).toBeVisible()
 }

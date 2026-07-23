@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import yaml from 'js-yaml'
 import { useConfigState } from './hooks/useConfig'
 import { useNavigation, type AppPage } from './hooks/useNavigation'
@@ -139,12 +139,14 @@ export default function App() {
     chatHistory,
     streamingText,
     isStreaming,
+    agentPhase,
     clearChatHistory,
     favoriteCommands,
     fillCommandFromFavorite,
     addFavoriteCommand,
     removeFavoriteCommand,
-    translate
+    translate,
+    cancelTranslation
   } =
     useQueryState()
   const [toast, setToast] = useState<{ text: string; tone: ToastTone }>({ text: '', tone: 'info' })
@@ -200,7 +202,7 @@ export default function App() {
   const [theme, setTheme] = useState<ThemeName>(() => resolveInitialTheme())
   const [themePreset, setThemePreset] = useState<ThemePresetId>(() => resolveInitialThemePreset())
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     pageRef.current = page
   }, [page])
 
@@ -1674,6 +1676,7 @@ export default function App() {
             chatHistory={chatHistory}
             streamingText={streamingText}
             isStreaming={isStreaming}
+            agentPhase={agentPhase}
             commands={terminalCommands}
             selectedCommand={selectedCommand}
             terminalBadgeState={querySessionBadgeState}
@@ -1684,6 +1687,7 @@ export default function App() {
             addFavoriteCommand={addFavoriteCommand}
             removeFavoriteCommand={removeFavoriteCommand}
             active={page === 'query'}
+            cancel={cancelTranslation}
             translate={(context) =>
               translate({
                 selectedCommand,

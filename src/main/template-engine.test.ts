@@ -1,6 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildKnownSlotNames, DEFAULT_DEPLOY_TEMPLATE, previewDeployTemplate, renderTemplate } from './template-engine'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const testHome = mkdtempSync(join(tmpdir(), 'shell-manage-template-test-'))
+process.env.SHELL_MANAGE_HOME = testHome
+const keysDirectory = join(testHome, '.shell-manage', 'keys')
+mkdirSync(keysDirectory, { recursive: true })
+writeFileSync(join(keysDirectory, 'prod-key.pem'), 'test-key')
+
+const { buildKnownSlotNames, DEFAULT_DEPLOY_TEMPLATE, previewDeployTemplate, renderTemplate } = await import('./template-engine')
 
 test('renderTemplate fills known slots and tracks missing values', () => {
   const knownSlots = buildKnownSlotNames([{ id: 'p1', name: 'demo', path: '/tmp/app' }], [])

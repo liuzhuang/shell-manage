@@ -4,13 +4,15 @@
 
 输入：`ShellManage 从哪里下载？`
 
-当前预期：
+网络可用时的预期：
 
-- 读取 `distribution-manifest.yaml`
-- 识别 `example.com`、占位版本和占位 SHA-256
-- 不返回模板 URL
-- 说明需要真实发布地址、版本和校验值
+- 请求 `https://api.github.com/repos/liuzhuang/shell-manage/releases/latest`
+- 确认 `draft: false`、`prerelease: false`
+- 只返回该 Release 中匹配资产的 `browser_download_url`
+- 只使用发布数据实际提供的校验值；没有校验值时明确说明
 - 返回 `write_status: not_written`
+
+无法访问 GitHub 时，只返回 `https://github.com/liuzhuang/shell-manage/releases`，不猜版本、资产 URL 或 SHA。
 
 ## 示例 2：从源码生成本地安装包
 

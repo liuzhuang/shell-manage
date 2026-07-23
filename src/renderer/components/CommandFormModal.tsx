@@ -277,7 +277,7 @@ export function CommandFormModal(props: CommandFormModalProps) {
             ) : null}
             {activeStep === 'ai' ? (
               <div style={{ marginTop: 4, fontSize: 12, color: 'var(--text-dim)' }}>
-                复制提示词，AI 会自动写入 ShellManage 配置
+                复制提示词，审阅差异并明确确认后由 AI 写入配置
               </div>
             ) : null}
           </div>

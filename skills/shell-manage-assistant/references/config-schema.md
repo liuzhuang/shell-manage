@@ -73,7 +73,7 @@
 - `llm.endpoint`
 - `llm.apiKey`
 - `llm.model`
-- `langsmith`：可选的追踪配置
+- `langsmith`：可选的详细追踪配置；`apiKey` 有效时自动开启，不使用额外开关
 - `tagOrder`：标签显示顺序
 - `logViewPresets`：多日志视图预设
 - `themePreset`：`system`、`coder` 或 `girl`

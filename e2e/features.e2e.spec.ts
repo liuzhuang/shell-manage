@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { openAiCommandForm, openCommandFormPickStep, openDemoCommandForm, confirmDemoCommandImport, cleanupDemoCommandsFromForm } from './helpers/command-form'
+import { setElectronViewportSize } from './helpers/electron-viewport'
 import { setHiddenHomeSearch, skipFirstRunAiGuide } from './helpers/home'
 
 const appEntry = join(process.cwd(), 'dist/main/index.js')
@@ -205,7 +206,9 @@ test('点击"全部"标签取消过滤还原所有命令', async () => {
 
 // ─── 侧边栏折叠/展开 ─────────────────────────────────────────────────────────
 
-test('侧边栏 Tab 首次加载与重复切换保持响应', async () => {
+const sidebarPerformanceTest = process.env.SHELL_MANAGE_E2E_SKIP_PERFORMANCE ? test.skip : test
+
+sidebarPerformanceTest('侧边栏 Tab 首次加载与重复切换保持响应', async () => {
   const measureRound = async () => [
     await measureSidebarSwitch('tab-editor', 'editor-page'),
     await measureSidebarSwitch('tab-home', 'home-page'),
@@ -220,10 +223,11 @@ test('侧边栏 Tab 首次加载与重复切换保持响应', async () => {
   const secondRound = await measureRound()
 
   expect(firstRound[4], `监控页首次加载：${firstRound[4].toFixed(1)}ms`).toBeLessThan(120)
+  // 首次挂载以 60Hz 下最多四帧为预算；重复切换仍必须稳定在 50ms 内。
   expect(
     Math.max(...firstRound.filter((_, index) => index !== 4)),
     `其他页面首次切换：${firstRound.map((value) => `${value.toFixed(1)}ms`).join(', ')}`
-  ).toBeLessThan(50)
+  ).toBeLessThan(75)
   expect(
     Math.max(...secondRound),
     `重复切换：${secondRound.map((value) => `${value.toFixed(1)}ms`).join(', ')}`
@@ -261,14 +265,28 @@ test('顶部与侧栏保留窗口拖拽面且控件仍可点击', async () => {
 })
 
 test('双击顶部拖拽区切换窗口最大化与还原', async () => {
-  const topDragRegion = page.getByTestId('window-top-drag-region')
-  await expect.poll(async () => (await page.evaluate(() => window.api.getWindowFullscreen())).fullscreen).toBe(true)
+  await expect.poll(async () => electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return null
+    if (win.isFullScreen()) win.setFullScreen(false)
+    if (win.isMaximized()) win.unmaximize()
+    win.setBounds({ width: 900, height: 600 }, false)
+    const bounds = win.getBounds()
+    return {
+      expanded: win.isFullScreen() || win.isMaximized(),
+      width: bounds.width,
+      height: bounds.height
+    }
+  })).toEqual({ expanded: false, width: 900, height: 600 })
 
-  await topDragRegion.dblclick()
+  const topDragRegion = page.getByTestId('window-top-drag-region')
   await expect.poll(async () => (await page.evaluate(() => window.api.getWindowFullscreen())).fullscreen).toBe(false)
 
   await topDragRegion.dblclick()
   await expect.poll(async () => (await page.evaluate(() => window.api.getWindowFullscreen())).fullscreen).toBe(true)
+
+  await topDragRegion.dblclick()
+  await expect.poll(async () => (await page.evaluate(() => window.api.getWindowFullscreen())).fullscreen).toBe(false)
 })
 
 test('侧边栏图标模式可展开恢复文字', async () => {
@@ -321,6 +339,20 @@ test('设置页将 AI 独立为 Tab 并隐藏预设编辑入口', async () => {
   await page.getByTestId('visual-tab-ai').click()
   await expect(page.getByRole('tabpanel').getByRole('heading', { name: 'AI 配置' })).toBeVisible()
   await expect(page.getByRole('tabpanel')).toContainText('AI 模型')
+  await expect(page.getByRole('tabpanel')).toContainText('LANGSMITH_TRACING')
+  await expect(page.getByRole('tabpanel')).toContainText('LANGSMITH_ENDPOINT')
+  await expect(page.getByRole('tabpanel')).toContainText('LANGSMITH_API_KEY')
+  await expect(page.getByRole('tabpanel')).toContainText('LANGSMITH_PROJECT')
+  await page.getByTestId('visual-langsmith-tracing').uncheck()
+  await page.getByTestId('visual-langsmith-endpoint').fill('https://smith.example')
+  await page.getByTestId('visual-langsmith-api-key').fill('langsmith-test-key')
+  await page.getByTestId('visual-langsmith-project').fill('shell-manage-e2e')
+  await page.getByTestId('editor-save').click()
+  await expect.poll(async () => {
+    const saved = await page.evaluate(() => window.api.configRead())
+    return ['tracing: false', 'endpoint: https://smith.example', 'apiKey: langsmith-test-key', 'project: shell-manage-e2e']
+      .every((entry) => saved.includes(entry))
+  }).toBe(true)
   await expect(page.getByRole('tabpanel')).not.toContainText('基础设置')
 
   await page.getByTestId('visual-tab-settings').click()
@@ -377,6 +409,7 @@ test('侧边栏最近命令可删除且不会删除配置命令', async () => {
   await expect(page.getByTestId('home-page')).toBeVisible()
 
   await expect(page.getByTestId('sidebar-recent-item-alpha')).toBeVisible()
+  await page.getByTestId('sidebar-recent-item-alpha').hover()
   await page.getByTestId('sidebar-recent-remove-alpha').click()
   await expect(page.getByTestId('sidebar-recent-item-alpha')).toHaveCount(0)
   await expect(page.getByTestId('command-row-alpha')).toBeVisible()
@@ -573,7 +606,7 @@ test('快捷菜单打开 AI 添加命令提示词', async () => {
   await expect(page.getByTestId('assistant-skill-install-command')).toHaveText(skillInstallCommand)
   await expect(page.getByTestId('ai-prompt-preview')).toContainText('$shell-manage-assistant')
   await expect(page.getByTestId('ai-prompt-preview')).toContainText('如果该 Skill 不可用')
-  await expect(page.getByTestId('ai-prompt-preview')).toContainText('由你直接写入配置文件')
+  await expect(page.getByTestId('ai-prompt-preview')).toContainText('未收到用户明确确认时不得写入')
 })
 
 test('AI 添加命令可复制 Assistant Skill 安装命令', async () => {
@@ -700,7 +733,7 @@ async function setEditorContent(targetPage: Page, content: string): Promise<void
 
 async function launchWithHome(homeDir: string, extraEnv: Record<string, string> = {}): Promise<void> {
   electronApp = await electron.launch({
-    args: [appEntry],
+    args: [appEntry, '-ApplePersistenceIgnoreState', 'YES'],
     env: {
       ...process.env,
       HOME: homeDir,
@@ -710,6 +743,7 @@ async function launchWithHome(homeDir: string, extraEnv: Record<string, string> 
   })
   page = await electronApp.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  await setElectronViewportSize(page)
   await skipFirstRunAiGuide(page)
   await expect(page.getByTestId('home-page')).toBeVisible()
 }

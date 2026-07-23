@@ -9,7 +9,8 @@ export type TerminalTuiEntry = {
 
 const ANSI_RESET = '\x1b[0m'
 const ANSI_DIM = '\x1b[2;90m'
-const ROLE_COLUMN_WIDTH = 4
+const ANSI_TIME = '\x1b[1;37m'
+const ROLE_COLUMN_WIDTH = 10
 const TONE_COLOR: Record<TerminalTuiTone, string> = {
   user: '\x1b[1;36m',
   assistant: '\x1b[1;35m',
@@ -24,13 +25,13 @@ export function formatTerminalTuiEntry(entry: TerminalTuiEntry): string {
   if (!content) return ''
 
   const label = sanitizeTerminalText(entry.label)
-    .replace(/\s/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
     .slice(0, ROLE_COLUMN_WIDTH)
-    .toUpperCase()
     .padEnd(ROLE_COLUMN_WIDTH)
   const time = formatLocalTime(entry.at)
   const separator = `${ANSI_DIM}│${ANSI_RESET}`
-  const firstPrefix = `${ANSI_DIM}${time}${ANSI_RESET} ${separator} ${TONE_COLOR[entry.tone]}${label}${ANSI_RESET} ${separator} `
+  const firstPrefix = `${ANSI_TIME}${time}${ANSI_RESET} ${separator} ${TONE_COLOR[entry.tone]}${label}${ANSI_RESET} ${separator} `
   const continuationPrefix = `${' '.repeat(time.length + 1)}${separator} ${' '.repeat(ROLE_COLUMN_WIDTH)} ${separator} `
   const lines = content.split('\n')
 

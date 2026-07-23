@@ -18,6 +18,7 @@ import {
   BROWSER_NEWTAB_URL,
   BROWSER_TUTORIAL_URL
 } from './helpers/browser'
+import { setElectronViewportSize } from './helpers/electron-viewport'
 
 const appEntry = join(process.cwd(), 'dist/main/index.js')
 const execFileAsync = promisify(execFile)
@@ -290,6 +291,26 @@ test('新建 Tab 后导航到不同 URL 不会落在旧 Tab 上', async () => {
   }
 })
 
+test('网页打开新页面后顶部 Tab 自动选中', async () => {
+  const sourceServer = await startMarkerServer('E2E_BROWSER_POPUP_SOURCE')
+  const targetServer = await startMarkerServer('E2E_BROWSER_POPUP_TARGET')
+  const sourceUrl = `http://127.0.0.1:${sourceServer.port}/`
+  const targetUrl = `http://127.0.0.1:${targetServer.port}/`
+
+  try {
+    await openBrowserPage(page)
+    await navigateBrowserUrl(page, sourceUrl)
+    await waitForActiveTabUrl(page, String(sourceServer.port))
+
+    await page.evaluate((url) => window.api.browserCreateTab({ url }), targetUrl)
+    await waitForActiveTabUrl(page, String(targetServer.port))
+    await expect(page.getByTestId('browser-tab-item-1')).toHaveAttribute('aria-selected', 'true')
+  } finally {
+    await closeServer(sourceServer.server)
+    await closeServer(targetServer.server)
+  }
+})
+
 test('应用强制刷新后恢复浏览器且切回命令页无原生视图残留', async () => {
   const server = await startMarkerServer('E2E_BROWSER_RELOAD_GHOST')
   const url = `http://127.0.0.1:${server.port}/`
@@ -418,7 +439,7 @@ async function openNewBrowserTab(targetPage: Page): Promise<void> {
 
 async function launchWithHome(homeDir: string, expectedPage: 'home' | 'browser' = 'home'): Promise<void> {
   electronApp = await electron.launch({
-    args: [appEntry],
+    args: [appEntry, '-ApplePersistenceIgnoreState', 'YES'],
     env: {
       ...process.env,
       HOME: homeDir,
@@ -427,6 +448,7 @@ async function launchWithHome(homeDir: string, expectedPage: 'home' | 'browser' 
   })
   page = await electronApp.firstWindow()
   await page.waitForLoadState('domcontentloaded')
+  await setElectronViewportSize(page)
   await expect(page.getByTestId(expectedPage === 'browser' ? 'browser-page' : 'home-page')).toBeVisible()
 }
 
