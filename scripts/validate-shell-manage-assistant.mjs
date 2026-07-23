@@ -37,8 +37,10 @@ function collectTextFiles(directory) {
 const relatedFiles = [
   ...collectTextFiles(skillRoot),
   join(repoRoot, 'skills/README.md'),
-  join(repoRoot, 'docs/2026-06-01/skills-e2e.md'),
-  join(repoRoot, 'docs/marketing/产品定位.md')
+  ...[
+    join(repoRoot, 'docs/2026-06-01/skills-e2e.md'),
+    join(repoRoot, 'docs/marketing/产品定位.md')
+  ].filter(existsSync)
 ]
 
 const forbiddenText = [

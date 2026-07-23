@@ -78,6 +78,7 @@ const QUERY_COMMAND_RISK_SYSTEM_PROMPT = [
   'safe 仅用于常规、非敏感、无持久化写入且不改变本机或远程状态的只读查询。',
   '读取凭据或机密、执行通用代码、持久化写入、权限修改、网络外发或远程状态变化至少标记 review。',
   '明确删除、磁盘破坏、凭据窃取或其他不可逆破坏标记 blocked。',
+  'rm、rmdir、unlink、shred、find -delete 及等价删除操作一律标记 blocked；即使目标位于 /tmp、缓存目录、工作区、构建产物或测试目录也不得降级。',
   '无法确定真实副作用时设置 isUncertain=true；不得因为命令名称陌生就臆测其安全。'
 ].join('\n')
 

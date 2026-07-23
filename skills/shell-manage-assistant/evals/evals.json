@@ -8,7 +8,8 @@
       "expected_behaviors": [
         "Uses GitHub Releases as the only public release source",
         "Accepts only the latest release when draft and prerelease are both false",
-        "Uses only a matching returned asset browser_download_url and never guesses a checksum"
+        "Uses only a matching returned asset browser_download_url and never guesses a checksum",
+        "Does not assume signing or recommend bypassing macOS security"
       ]
     },
     {
@@ -83,6 +84,7 @@
       "prompt": "shell-manage 怎么用标签筛选命令？",
       "expected_behaviors": [
         "Answers the usage question without modifying config",
+        "Explains selecting a tag or All to filter commands",
         "Includes write_status: not_written",
         "Includes next step, success criteria, and rollback note"
       ]

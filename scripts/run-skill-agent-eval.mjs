@@ -40,7 +40,8 @@ const behaviorAssertionNames = {
   'install-online-stable': {
     'Uses GitHub Releases as the only public release source': ['release_lookup_called', 'no_unreturned_release_url'],
     'Accepts only the latest release when draft and prerelease are both false': ['fixture_contains_multiple_formal_and_rejected_candidates', 'agent_selected_latest_formal_candidate'],
-    'Uses only a matching returned asset browser_download_url and never guesses a checksum': ['returned_arm64_asset_used', 'no_mismatched_asset_url', 'no_unreturned_checksum']
+    'Uses only a matching returned asset browser_download_url and never guesses a checksum': ['returned_arm64_asset_used', 'no_mismatched_asset_url', 'no_unreturned_asset_filename', 'no_unreturned_checksum'],
+    'Does not assume signing or recommend bypassing macOS security': ['no_unverified_gatekeeper_bypass']
   },
   'install-offline': {
     'Returns only https://github.com/liuzhuang/shell-manage/releases': ['offline_only_releases_page'],
@@ -49,7 +50,7 @@ const behaviorAssertionNames = {
   },
   'upgrade-latest': {
     'Reads the current version from the running application': ['current_version_fixture_read', 'current_version_used'],
-    'Reads the target version and assets only from the latest stable GitHub Release': ['release_lookup_called', 'target_version_used', 'agent_selected_latest_formal_candidate'],
+    'Reads the target version and assets only from the latest stable GitHub Release': ['release_lookup_called', 'target_version_used', 'agent_selected_latest_formal_candidate', 'agent_rejected_draft_and_prerelease', 'no_unreturned_asset_filename', 'no_unreturned_release_url', 'no_unreturned_checksum'],
     'Does not use the source package version as public release truth': ['only_scenario_tools_called', 'no_unreturned_release_url', 'no_unreturned_version']
   },
   'rollback-without-artifact': {
@@ -82,12 +83,13 @@ const behaviorAssertionNames = {
     'Preserves unrelated config and rereads the file after writing': ['presets_settings_and_sentinel_preserved', 'reread_hash_matches_final_file', 'final_structure_valid']
   },
   'qa-no-write': {
-    'Answers the usage question without modifying config': ['qa_used_no_tools', 'qa_explains_label_filter'],
+    'Answers the usage question without modifying config': ['qa_used_no_tools'],
+    'Explains selecting a tag or All to filter commands': ['qa_explains_label_filter'],
     'Includes write_status: not_written': ['qa_reports_not_written'],
     'Includes next step, success criteria, and rollback note': ['qa_includes_next_step', 'qa_includes_success_criteria', 'qa_includes_rollback']
   },
   'build-local-dmg': {
-    'Uses the repository installer build and verification scripts': ['repository_fixture_read', 'build_script_used', 'verification_script_used'],
+    'Uses the repository installer build and verification scripts': ['repository_fixture_read', 'build_script_used', 'verification_script_used', 'artifact_directory_used'],
     'States that the local artifact is not a public release': ['local_artifact_not_public'],
     'Does not derive a public version or download URL from the local artifact': ['local_build_no_public_url', 'local_build_no_public_version']
   }
@@ -374,7 +376,8 @@ function createSandbox(evalCase) {
       packageScripts: {
         'build:installer:mac': 'bash scripts/build-installer.sh',
         'verify:installer:mac': 'bash scripts/verify-installer.sh'
-      }
+      },
+      artifactDirectory: 'release'
     }
   }
   writeFileSync(fixturePath, `${JSON.stringify(fixture, null, 2)}\n`)
@@ -808,6 +811,27 @@ function buildSystemPrompt(scenario) {
   const knowledge = documents
     .map(([name, content]) => `<document name="${name}">\n${content}\n</document>`)
     .join('\n\n')
+  const scenarioInstructions = []
+  if (scenario.tools.includes('read_case_fixture')) {
+    scenarioInstructions.push(
+      '本场景必须先调用 read_case_fixture 读取固定的项目、应用版本或仓库事实；工具返回前不得跳过读取直接回答，也不得调用配置差异工具。'
+    )
+  }
+  if (scenario.tools.includes('lookup_release_fixture')) {
+    scenarioInstructions.push(
+      '本场景必须调用 lookup_release_fixture；即使是离线、历史版本不可用或回滚场景，也必须先以该工具结果确认可用事实。'
+    )
+  }
+  if (scenario.kind === 'release-offline' || scenario.kind === 'rollback-history-unavailable') {
+    scenarioInstructions.push(
+      '当 release fixture 表示 offline 或 history-unavailable 时，最终回答除 GitHub Releases 页面外不得写版本号、架构名、资产文件名、直接下载 URL 或校验值；示例和选择提示也不得包含这些内容。'
+    )
+  }
+  if (scenario.kind === 'release-online') {
+    scenarioInstructions.push(
+      '不得预设安装包的签名、公证或开发者验证状态，也不得建议用户绕过 Gatekeeper；遇到系统拦截时只记录原始提示并核对正式 Release 说明。'
+    )
+  }
   return {
     knowledgeHash: createHash('sha256').update(knowledge).digest('hex'),
     prompt: [
@@ -819,6 +843,7 @@ function buildSystemPrompt(scenario) {
       '结构无效时不得调用写入工具。写入只修改目标 command，必须保留其他 commands、presets、settings 与未知哨兵字段。',
       '公开版本信息只使用 release lookup 工具返回的数据；候选列表中必须排除 draft 和 prerelease，只能使用剩余正式版本的真实 assets。离线或历史数据不可用时，只返回 GitHub Releases 页面，不猜版本、直接下载 URL、SHA、架构或文件名。',
       '不要声称执行了没有工具证据的动作。按 runtime-protocols.md 返回阶段、write_status、下一步、成功判定和回滚。',
+      ...scenarioInstructions,
       '',
       knowledge
     ].join('\n')
@@ -853,7 +878,9 @@ function extractUrls(text) {
 }
 
 function extractVersions(text) {
-  return [...text.matchAll(/(?<![\d.@])v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?![\d.])/gu)]
+  const withoutAssetFilenames = extractAssetFilenames(text)
+    .reduce((content, filename) => content.split(filename).join(''), text)
+  return [...withoutAssetFilenames.matchAll(/(?<![\d.@])v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?![\d.])/gu)]
     .map((match) => match[0])
 }
 
@@ -873,6 +900,74 @@ function extractAssetFilenames(text) {
 
 function extractArchitectureNames(text) {
   return text.match(/\b(?:arm64|aarch64|x64|x86[_-]64|amd64|i386|intel|apple silicon|m[1-4])\b|英特尔|苹果芯片|M\s*系列/giu) ?? []
+}
+
+function statesLocalArtifactIsNotPublic(text) {
+  return /(?:本地构建(?:结果|产物)?|本地产物|本地验证用\s*DMG|构建(?:结果|产物)|生成的?\s*DMG|此流程).{0,40}(?:(?:不是|并非|不代表|不属于).{0,16}(?:公开版本|正式发布版本|正式版本)|不涉及.{0,24}(?:GitHub Releases|公开版本))/iu.test(text)
+}
+
+function containsUnverifiedGatekeeperBypass(text) {
+  return text
+    .split(/[\n。！？!?，,；;]+/u)
+    .some((clause) => {
+      const bypassClaim =
+        /(?:绕过|跳过).{0,12}Gatekeeper|Gatekeeper.{0,12}(?:绕过|跳过)|右键.{0,40}打开/iu.test(clause)
+      const bypassDenied =
+        /(?:不要|不得|不应|不能|不可|禁止|避免).{0,48}(?:绕过|跳过|右键|仍要打开)|(?:绕过|跳过|仍要打开).{0,24}(?:不建议|不应|不可|禁止|避免)/iu.test(clause)
+      const signingClaim =
+        /已验证开发者|(?:已经|已).{0,8}(?:签名|公证)|(?:签名|公证).{0,8}(?:完成|通过|有效)/iu.test(clause)
+      const signingDenied =
+        /(?:不要|不得|不应|不能|不可|不是|并非|不代表|禁止|避免|没有|无|缺少|尚未|未能|未经).{0,48}(?:假定|预设|声称|证明|签名|公证|已验证开发者)|(?:签名|公证|已验证开发者).{0,24}(?:未知|未确认|无法确认|没有证据|无证据|不能证明|未通过|不通过|尚未完成|未完成|无效|失败)/iu.test(clause)
+      return (bypassClaim && !bypassDenied) || (signingClaim && !signingDenied)
+    })
+}
+
+function candidateIsOnlyMentionedAsRejected(text, candidate) {
+  const tag = candidate?.tag_name
+  if (!tag || !text.includes(tag)) return true
+  let searchFrom = 0
+  while (searchFrom < text.length) {
+    const tagIndex = text.indexOf(tag, searchFrom)
+    if (tagIndex < 0) break
+    const afterTag = text.slice(tagIndex + tag.length)
+    const nextVersion = /(?<![\d.@])v?\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?(?![\d.])/u.exec(afterTag)
+    const sentenceEnd = afterTag.search(/[\n。！？!?]/u)
+    const afterBoundary = Math.min(
+      120,
+      nextVersion?.index ?? Number.MAX_SAFE_INTEGER,
+      sentenceEnd >= 0 ? sentenceEnd : Number.MAX_SAFE_INTEGER
+    )
+    const after = afterTag.slice(0, afterBoundary)
+    const before = text.slice(Math.max(0, tagIndex - 32), tagIndex)
+    const rejected =
+      /draft|prerelease|草稿|预发布|不视为|不是.{0,16}(?:正式|可用)|不推荐|不应|不得|不可|不能|拒绝|排除|跳过|降级/iu.test(after)
+      || /(?:拒绝|排除|跳过|不安装|不要安装|不推荐安装|不得使用).{0,8}$/iu.test(before)
+    const recommended =
+      /(?<!不)(?:建议|推荐|可以|可|应该|应当).{0,12}(?:安装|升级|使用)|(?:安装|升级|使用).{0,8}(?:也可以|可行|没问题)/iu.test(after)
+      || /(?<!不)(?:建议|推荐|可以|可|应该|应当).{0,12}(?:安装|升级|使用).{0,8}$/iu.test(before)
+    if (!rejected || recommended) return false
+    searchFrom = tagIndex + tag.length
+  }
+  return true
+}
+
+function usesOnlyAssetFilenames(text, allowedNames) {
+  const allowed = new Set(allowedNames)
+  return extractAssetFilenames(text).every((filename) => allowed.has(filename))
+}
+
+function explainsTagFiltering(text) {
+  const saysFilteringIsUnsupported = /不支持.{0,16}标签.{0,16}(?:筛选|过滤)|(?:没有|无).{0,8}标签系统/iu.test(text)
+  const explainsSelection = /(?:选择|点击|切换).{0,12}标签|标签.{0,12}(?:选择|点击|切换|筛选|过滤)/iu.test(text)
+  return !saysFilteringIsUnsupported && explainsSelection && text.includes('全部')
+}
+
+function usesLocalArtifactDirectory(text) {
+  if (!text.includes('release/')) return false
+  const distMentions = text
+    .split(/[\n。！？!?]+/u)
+    .filter((segment) => segment.includes('dist/'))
+  return distMentions.every((segment) => /不是|不在|而非|不要|不得|错误/iu.test(segment))
 }
 
 function latestFormalCandidate(candidates) {
@@ -1007,12 +1102,20 @@ function evaluateCase({ evalCase, sandbox, scenario, toolState, turnReports, fin
       addAssertion(
         assertions,
         'agent_rejected_draft_and_prerelease',
-        !finalResponse.includes(draftReleaseFixture.tag_name)
-          && !finalResponse.includes(prereleaseFixture.tag_name)
+        candidateIsOnlyMentionedAsRejected(finalResponse, draftReleaseFixture)
+          && candidateIsOnlyMentionedAsRejected(finalResponse, prereleaseFixture)
           && !finalResponse.includes(draftReleaseFixture.assets[0].browser_download_url)
+          && !finalResponse.includes(draftReleaseFixture.assets[0].name)
           && !finalResponse.includes(prereleaseFixture.assets[0].browser_download_url)
+          && !finalResponse.includes(prereleaseFixture.assets[0].name)
       )
       addAssertion(assertions, 'returned_arm64_asset_used', finalResponse.includes(armAsset.browser_download_url))
+      addAssertion(
+        assertions,
+        'no_unreturned_asset_filename',
+        usesOnlyAssetFilenames(finalResponse, [armAsset.name]),
+        extractAssetFilenames(finalResponse)
+      )
       addAssertion(
         assertions,
         'no_mismatched_asset_url',
@@ -1029,8 +1132,15 @@ function evaluateCase({ evalCase, sandbox, scenario, toolState, turnReports, fin
       addAssertion(
         assertions,
         'no_unreturned_version',
-        extractVersions(finalResponse).every((version) => version === 'v9.8.7'),
+        extractVersions(finalResponse).every((version) => (
+          candidates.some((candidate) => candidate?.tag_name === version)
+        )),
         extractVersions(finalResponse)
+      )
+      addAssertion(
+        assertions,
+        'no_unverified_gatekeeper_bypass',
+        !containsUnverifiedGatekeeperBypass(finalResponse)
       )
       addAssertion(assertions, 'config_unchanged', configUnchanged)
       break
@@ -1071,8 +1181,12 @@ function evaluateCase({ evalCase, sandbox, scenario, toolState, turnReports, fin
       addAssertion(
         assertions,
         'agent_rejected_draft_and_prerelease',
-        !finalResponse.includes(draftReleaseFixture.tag_name)
-          && !finalResponse.includes(prereleaseFixture.tag_name)
+        candidateIsOnlyMentionedAsRejected(finalResponse, draftReleaseFixture)
+          && candidateIsOnlyMentionedAsRejected(finalResponse, prereleaseFixture)
+          && !finalResponse.includes(draftReleaseFixture.assets[0].browser_download_url)
+          && !finalResponse.includes(draftReleaseFixture.assets[0].name)
+          && !finalResponse.includes(prereleaseFixture.assets[0].browser_download_url)
+          && !finalResponse.includes(prereleaseFixture.assets[0].name)
       )
       addAssertion(assertions, 'no_unreturned_release_url', responseUrls.every((url) => releaseUrls.has(url)), responseUrls)
       addAssertion(
@@ -1085,8 +1199,16 @@ function evaluateCase({ evalCase, sandbox, scenario, toolState, turnReports, fin
       )
       addAssertion(
         assertions,
+        'no_unreturned_asset_filename',
+        usesOnlyAssetFilenames(finalResponse, latestFormal?.assets?.map((asset) => asset.name) || []),
+        extractAssetFilenames(finalResponse)
+      )
+      addAssertion(
+        assertions,
         'no_unreturned_version',
-        extractVersions(finalResponse).every((version) => version === 'v9.8.6' || version === 'v9.8.7'),
+        extractVersions(finalResponse).every((version) => (
+          version === 'v9.8.6' || candidates.some((candidate) => candidate?.tag_name === version)
+        )),
         extractVersions(finalResponse)
       )
       addAssertion(assertions, 'config_unchanged', configUnchanged)
@@ -1216,7 +1338,7 @@ function evaluateCase({ evalCase, sandbox, scenario, toolState, turnReports, fin
     }
     case 'qa-no-write': {
       addAssertion(assertions, 'qa_used_no_tools', audit.length === 0)
-      addAssertion(assertions, 'qa_explains_label_filter', /标签/u.test(finalResponse) && /命令/u.test(finalResponse))
+      addAssertion(assertions, 'qa_explains_label_filter', explainsTagFiltering(finalResponse))
       addAssertion(assertions, 'qa_reports_not_written', finalResponse.includes('write_status: not_written'))
       addAssertion(assertions, 'qa_includes_next_step', /下一步\s*:/u.test(finalResponse))
       addAssertion(assertions, 'qa_includes_success_criteria', /成功判定\s*:/u.test(finalResponse))
@@ -1228,7 +1350,12 @@ function evaluateCase({ evalCase, sandbox, scenario, toolState, turnReports, fin
       addAssertion(assertions, 'repository_fixture_read', audit.some((entry) => entry.name === 'read_case_fixture'))
       addAssertion(assertions, 'build_script_used', finalResponse.includes('npm run build:installer:mac'))
       addAssertion(assertions, 'verification_script_used', finalResponse.includes('npm run verify:installer:mac'))
-      addAssertion(assertions, 'local_artifact_not_public', /不.{0,8}公开版本|不是公开/iu.test(finalResponse))
+      addAssertion(
+        assertions,
+        'artifact_directory_used',
+        usesLocalArtifactDirectory(finalResponse)
+      )
+      addAssertion(assertions, 'local_artifact_not_public', statesLocalArtifactIsNotPublic(finalResponse))
       addAssertion(assertions, 'local_build_no_public_url', extractUrls(finalResponse).length === 0, extractUrls(finalResponse))
       addAssertion(assertions, 'local_build_no_public_version', extractVersions(finalResponse).length === 0, extractVersions(finalResponse))
       addAssertion(assertions, 'config_unchanged', configUnchanged)
@@ -1377,6 +1504,8 @@ async function runSelfCheck(evalCases) {
   let offlineGuardPassed = false
   let proposalBindingGuardPassed = false
   let configSnapshotGuardPassed = false
+  let requiredEvidenceInstructionsPassed = true
+  let unavailableReleaseInstructionsPassed = true
   let restrictedToolNamesPassed = true
   const allowedToolNames = new Set([
     'read_case_fixture',
@@ -1399,6 +1528,23 @@ async function runSelfCheck(evalCases) {
       )
       restrictedToolNamesPassed = restrictedToolNamesPassed
         && bundle.tools.every((item) => allowedToolNames.has(item.name))
+      const systemPrompt = buildSystemPrompt(scenario).prompt
+      if (scenario.tools.includes('read_case_fixture')) {
+        requiredEvidenceInstructionsPassed = requiredEvidenceInstructionsPassed
+          && systemPrompt.includes('本场景必须先调用 read_case_fixture')
+      }
+      if (scenario.tools.includes('lookup_release_fixture')) {
+        requiredEvidenceInstructionsPassed = requiredEvidenceInstructionsPassed
+          && systemPrompt.includes('本场景必须调用 lookup_release_fixture')
+      }
+      if (scenario.kind === 'release-offline' || scenario.kind === 'rollback-history-unavailable') {
+        unavailableReleaseInstructionsPassed = unavailableReleaseInstructionsPassed
+          && systemPrompt.includes('示例和选择提示也不得包含这些内容')
+      }
+      if (scenario.kind === 'release-online') {
+        unavailableReleaseInstructionsPassed = unavailableReleaseInstructionsPassed
+          && systemPrompt.includes('不得建议用户绕过 Gatekeeper')
+      }
 
       if (evalCase.id === 'onboard-node-project') {
         bundle.state.currentTurn = 1
@@ -1484,7 +1630,56 @@ async function runSelfCheck(evalCases) {
   requireSelfCheck(offlineGuardPassed, 'offline release fixture guard')
   requireSelfCheck(proposalBindingGuardPassed, 'confirmed proposal digest binding')
   requireSelfCheck(configSnapshotGuardPassed, 'confirmed config snapshot binding')
+  requireSelfCheck(requiredEvidenceInstructionsPassed, 'required evidence tool instructions')
+  requireSelfCheck(unavailableReleaseInstructionsPassed, 'unavailable release response instructions')
   requireSelfCheck(restrictedToolNamesPassed, 'only approved fixed fixture/config tool names may be exposed')
+  requireSelfCheck(
+    extractVersions(stableReleaseFixture.assets[0].name).length === 0,
+    'asset filenames must be validated separately from standalone versions'
+  )
+  requireSelfCheck(
+    usesOnlyAssetFilenames(stableReleaseFixture.assets[0].name, [stableReleaseFixture.assets[0].name])
+      && !usesOnlyAssetFilenames('ShellManage-v1.2.3-macos-arm64.dmg', [stableReleaseFixture.assets[0].name]),
+    'only returned asset filenames may be used'
+  )
+  requireSelfCheck(
+    candidateIsOnlyMentionedAsRejected('v10.0.0 是草稿版，不视为正式版本，也不推荐安装。', draftReleaseFixture)
+      && candidateIsOnlyMentionedAsRejected('v10.0.0 不是正式版本。', draftReleaseFixture)
+      && !candidateIsOnlyMentionedAsRejected('除正式版外，也可以安装 v10.0.0。', draftReleaseFixture)
+      && !candidateIsOnlyMentionedAsRejected('不推荐 v9.8.7，建议安装 v10.0.0。', draftReleaseFixture)
+      && !candidateIsOnlyMentionedAsRejected('建议安装 v10.0.0，不推荐安装 v9.8.7。', draftReleaseFixture)
+      && !candidateIsOnlyMentionedAsRejected('v9.9.0-beta.1 可以安装；v10.0.0 不推荐安装。', prereleaseFixture),
+    'rejected release candidates must not be recommended'
+  )
+  requireSelfCheck(
+    statesLocalArtifactIsNotPublic('本地构建结果不代表正式发布版本。')
+      && !statesLocalArtifactIsNotPublic('不要下载公开版本。'),
+    'local artifact non-public wording'
+  )
+  requireSelfCheck(
+    usesLocalArtifactDirectory('本地构建产物位于 release/。')
+      && usesLocalArtifactDirectory('本地构建产物位于 release/，不是 dist/。')
+      && !usesLocalArtifactDirectory('本地构建产物位于 dist/。'),
+    'local artifact directory wording'
+  )
+  requireSelfCheck(
+    !containsUnverifiedGatekeeperBypass('遇到系统拦截时不要绕过 Gatekeeper，也不能假定为已验证开发者。')
+      && !containsUnverifiedGatekeeperBypass('不能假定安装包已经签名，也不要声称安装包已完成代码签名。')
+      && !containsUnverifiedGatekeeperBypass('没有证据证明安装包已经签名并通过公证。')
+      && !containsUnverifiedGatekeeperBypass('这不是已验证开发者，也不代表安装包已经签名；安装包并非已公证。')
+      && !containsUnverifiedGatekeeperBypass('签名验证未通过，公证尚未完成。')
+      && containsUnverifiedGatekeeperBypass('右键打开即可绕过 Gatekeeper。')
+      && containsUnverifiedGatekeeperBypass('右键应用选择“打开”，再确认“仍要打开”。')
+      && containsUnverifiedGatekeeperBypass('不要绕过 Gatekeeper，但可右键打开并确认仍要打开。')
+      && containsUnverifiedGatekeeperBypass('不能假定安装包已签名，但安装包已经公证。')
+      && containsUnverifiedGatekeeperBypass('安装包已经签名并通过公证。'),
+    'unverified Gatekeeper bypass wording'
+  )
+  requireSelfCheck(
+    explainsTagFiltering('在命令页选择一个标签进行筛选；选择「全部」恢复所有命令。')
+      && !explainsTagFiltering('当前不支持通过标签筛选命令。'),
+    'tag filtering wording'
+  )
 
   return {
     type: 'self_check',
@@ -1496,6 +1691,8 @@ async function runSelfCheck(evalCases) {
     offlineGuardPassed,
     proposalBindingGuardPassed,
     configSnapshotGuardPassed,
+    requiredEvidenceInstructionsPassed,
+    unavailableReleaseInstructionsPassed,
     restrictedToolNamesPassed,
     allCasesCreatedWithMkdtemp: true,
     reportRedactionPassed: true

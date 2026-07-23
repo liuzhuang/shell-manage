@@ -150,6 +150,30 @@ test('独立 LLM 风险判断无效、不确定或调用失败时停止自动执
   assert.match(failedResult.action.riskReason, /独立风险判断暂不可用/)
 })
 
+test('独立风险模型提示明确禁止把临时目录删除降级为 safe', async () => {
+  let capturedInvocation: StructuredAgentInvocation | undefined
+  const service = new LlmService(async (invocation) => {
+    capturedInvocation = invocation
+    return {
+      riskLevel: 'blocked',
+      riskReason: '删除操作具有不可逆副作用。',
+      isUncertain: false
+    }
+  })
+
+  const result = await service.assessCommandRisk(
+    'rm -rf /tmp/shell-manage-risk-eval',
+    {
+      ...config,
+      settings: { ...config.settings, llm: { ...config.settings.llm, apiKey: 'test-key' } }
+    }
+  )
+
+  assert.equal(result.riskLevel, 'blocked')
+  assert.match(capturedInvocation?.systemPrompt || '', /rm、rmdir、unlink、shred、find -delete/u)
+  assert.match(capturedInvocation?.systemPrompt || '', /\/tmp.*不得降级/u)
+})
+
 test('Query Agent 结构化响应必须包含风险判断', () => {
   assert.deepEqual(
     QUERY_AGENT_RESPONSE_SCHEMA.required,
