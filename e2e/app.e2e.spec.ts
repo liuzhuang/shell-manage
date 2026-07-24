@@ -1850,9 +1850,15 @@ test('历史对话默认隐藏并固定显示在屏幕中央', async () => {
   await page.getByTestId('log-analysis-translate').click()
   await expect(page.getByTestId('log-analysis-translate')).toHaveText('询问 AI')
   await openQueryHistory(page)
-  await expect(page.getByTestId('log-analysis-history-popover')).toBeVisible()
+  const historyPopover = page.getByTestId('log-analysis-history-popover')
+  await expect(historyPopover).toBeVisible()
   await expect(page.getByTestId('log-analysis-chat-history')).toBeVisible()
-  const popover = await page.getByTestId('log-analysis-history-popover').boundingBox()
+  await historyPopover.evaluate(async (element) => {
+    await Promise.all(
+      element.getAnimations().map((animation) => animation.finished.catch(() => undefined))
+    )
+  })
+  const popover = await historyPopover.boundingBox()
   const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
   expect(popover).not.toBeNull()
   expect(Math.abs(popover!.x + popover!.width / 2 - viewport.width / 2)).toBeLessThanOrEqual(3)
