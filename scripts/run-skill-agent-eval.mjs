@@ -461,7 +461,7 @@ function buildScenario(evalCase, sandbox) {
         tools: ['lookup_release_fixture'],
         turns: [
           `${evalCase.prompt}
-强制流程：即使已知当前离线，也必须先调用 lookup_release_fixture。最终回答除 ${releasePage} 外不得出现版本号、架构名、安装包文件名、直接下载地址或校验值。`
+强制流程：即使已知当前离线，也必须先调用 lookup_release_fixture。最终回答除 ${releasePage} 外不得出现版本号、架构名、安装包文件名、直接下载地址或校验值，也不得举例说明如何筛选资产。工具返回 offline 时严格使用 mandatory-scenario-constraints 给出的固定模板。`
         ],
         authorizations: [{}]
       }
@@ -472,7 +472,7 @@ function buildScenario(evalCase, sandbox) {
         tools: ['read_case_fixture', 'lookup_release_fixture'],
         turns: [
           `${evalCase.prompt}
-强制流程：先调用 read_case_fixture 获取 currentAppVersion，再调用 lookup_release_fixture；明确比较当前版本与最新正式版本。最终回答不得把较旧正式版本当作升级或回滚建议；忽略 draft 与 prerelease，不得提及它们的标签、资产或链接。`
+强制流程：先调用 read_case_fixture 获取 currentAppVersion，再调用 lookup_release_fixture；明确比较当前版本与最新正式版本，并使用“当前版本 <current> 低于最新正式版本 <target>，有新版本可升级”这种结论句。最终回答不得把较旧正式版本当作升级或回滚建议；忽略 draft 与 prerelease，不得提及它们的标签、资产或链接。`
         ],
         authorizations: [{}]
       }
@@ -503,7 +503,8 @@ function buildScenario(evalCase, sandbox) {
         ],
         target: devTarget,
         turns: [
-          `${evalCase.prompt.replace('/Users/dev/my-app', sandbox.projectRoot)}\n候选命令名使用 dev，标签使用「前端」，模式使用 service。先展示最小差异，未确认前不要写入。`,
+          `${evalCase.prompt.replace('/Users/dev/my-app', sandbox.projectRoot)}
+候选命令名使用 dev，标签使用「前端」，模式使用 service。强制流程：第一步调用 read_case_fixture 读取 package.json scripts，第二步调用 read_shellmanage_config，之后才可调用 show_config_diff 展示最小差异；未确认前不要写入。`,
           '确认：按刚才展示的最小差异写入，不修改其他命令、presets、settings 或哨兵字段。'
         ],
         authorizations: [{}, { write: true }]
@@ -613,6 +614,7 @@ function createCaseTools(sandbox, scenario, secrets = []) {
   const state = {
     currentTurn: 0,
     authorization: { write: false, overwrite: false, proposalDigest: '' },
+    fixtureRead: false,
     configRead: false,
     proposal: null,
     successfulWrites: 0,
@@ -669,7 +671,11 @@ function createCaseTools(sandbox, scenario, secrets = []) {
       async (args) => audited(
         'read_case_fixture',
         args,
-        () => ({ ok: true, fixture: JSON.parse(readFileSync(sandbox.fixturePath, 'utf8')) }),
+        () => {
+          const fixture = JSON.parse(readFileSync(sandbox.fixturePath, 'utf8'))
+          state.fixtureRead = true
+          return { ok: true, fixture }
+        },
         sandbox.fixturePath
       ),
       {
@@ -693,6 +699,9 @@ function createCaseTools(sandbox, scenario, secrets = []) {
     ),
     show_config_diff: tool(
       async (args) => audited('show_config_diff', args, () => {
+        if (scenario.tools.includes('read_case_fixture') && !state.fixtureRead) {
+          return { ok: false, error: 'read_case_fixture_required' }
+        }
         if (!state.configRead) return { ok: false, error: 'read_config_required' }
         const config = readYaml(sandbox.configPath)
         const validation = validateConfig(config)
@@ -721,7 +730,9 @@ function createCaseTools(sandbox, scenario, secrets = []) {
       }),
       {
         name: 'show_config_diff',
-        description: 'Show the minimal command diff. Call only after reading a structurally valid config. This never writes.',
+        description: scenario.tools.includes('read_case_fixture')
+          ? 'Show the minimal command diff. Call only after read_case_fixture and after reading a structurally valid config. This never writes.'
+          : 'Show the minimal command diff. Call only after reading a structurally valid config. This never writes.',
         schema: commandSchema
       }
     ),
@@ -839,6 +850,16 @@ function buildSystemPrompt(scenario) {
       '当 release fixture 表示 offline 或 history-unavailable 时，最终回答除 GitHub Releases 页面外不得写版本号、架构名、资产文件名、直接下载 URL 或校验值；示例和选择提示也不得包含这些内容。'
     )
   }
+  if (scenario.kind === 'release-offline') {
+    scenarioInstructions.push(
+      `release fixture 表示 offline 时，最终回答不得增加资产筛选示例或技术标识，严格使用以下固定模板：
+阶段: install
+write_status: not_written
+下一步: 当前无法获取正式发布事实，请在网络恢复后访问 ${releasePage}。
+成功判定: 网络恢复后可以打开该页面并查看正式发布信息。
+回滚: 本轮未执行下载、安装或配置写入，无需回滚。`
+    )
+  }
   if (scenario.kind === 'release-online') {
     scenarioInstructions.push(
       '忽略 draft 与 prerelease，最终回答不得提及它们的标签、资产或链接。最终回答不得建议右键/Control-click 打开、点击“仍要打开”/“Open Anyway”、通过“隐私与安全”或“安全性与隐私”允许打开、运行 xattr/spctl，或以其他方式绕过 Gatekeeper，也不得断言安装包已签名、已公证或来自已验证开发者；遇到系统拦截时只记录原始提示并核对正式 Release 说明。Release 返回 digest 时只报告原值，不拼装未经验证的校验命令。'
@@ -846,7 +867,12 @@ function buildSystemPrompt(scenario) {
   }
   if (scenario.kind === 'upgrade-online') {
     scenarioInstructions.push(
-      '最终回答必须使用 read_case_fixture 返回的 currentAppVersion 与 lookup_release_fixture 返回的最新正式版本进行明确比较；不得推荐或举例使用较旧正式版本；忽略 draft 与 prerelease，不得提及它们的标签、资产或链接。'
+      '最终回答必须使用 read_case_fixture 返回的 currentAppVersion 与 lookup_release_fixture 返回的最新正式版本进行明确比较，并明确写出“当前版本 <current> 低于最新正式版本 <target>，有新版本可升级”；不得推荐或举例使用较旧正式版本；忽略 draft 与 prerelease，不得提及它们的标签、资产或链接。'
+    )
+  }
+  if (scenario.kind === 'config-add-confirmed') {
+    scenarioInstructions.push(
+      '第一轮必须依次调用 read_case_fixture、read_shellmanage_config、show_config_diff；项目命令只能依据 read_case_fixture 返回的 packageJson.scripts 生成。未调用 read_case_fixture 时 show_config_diff 会拒绝请求。'
     )
   }
   if (scenario.kind === 'build-local') {
@@ -1005,6 +1031,8 @@ function statesUpgradeAvailable(text, currentVersion, targetVersion) {
   const current = escapeRegExp(currentVersion)
   const target = escapeRegExp(targetVersion)
   const withinSentence = '[^。！？!?\\n]'
+  const acrossSections = '[\\s\\S]'
+  const deniedAction = '(?:不要|不能|不应|不得|不可|不可以|暂不|无需|不需要|不必|(?:暂时)?不用|不建议|不推荐|禁止|请勿|勿)'
   const contradictsUpgrade = [
     new RegExp(`${current}${withinSentence}{0,48}(?:高于|新于)${withinSentence}{0,20}${target}`, 'iu'),
     new RegExp(`${target}${withinSentence}{0,48}(?:低于|旧于)${withinSentence}{0,20}${current}`, 'iu'),
@@ -1012,16 +1040,32 @@ function statesUpgradeAvailable(text, currentVersion, targetVersion) {
     new RegExp(`${target}${withinSentence}{0,32}(?:并不|不)(?:高于|新于|比${withinSentence}{0,12}${current}${withinSentence}{0,8}更新)`, 'iu'),
     new RegExp(`(?:不要|不能|不应|不得|无需|不需要|不必|(?:暂时)?不用|不建议|不推荐)${withinSentence}{0,80}(?:升级|更新)${withinSentence}{0,80}(?:${current}|${target})`, 'iu'),
     new RegExp(`(?:${current}|${target})${withinSentence}{0,120}(?:不要|不能|不应|不得|无需|不需要|不必|(?:暂时)?不用|不建议|不推荐)${withinSentence}{0,16}(?:升级|更新)`, 'iu'),
-    new RegExp(`${current}${withinSentence}{0,100}${target}${withinSentence}{0,40}(?:没有|无|不存在)${withinSentence}{0,8}(?:新版本|更新)`, 'iu')
+    new RegExp(`${current}${withinSentence}{0,100}${target}${withinSentence}{0,40}(?:没有|无|不存在)${withinSentence}{0,8}(?:新版本|更新)`, 'iu'),
+    new RegExp(`${target}${withinSentence}{0,120}${deniedAction}${withinSentence}{0,24}(?:下载|安装|覆盖|升级|更新)`, 'iu'),
+    new RegExp(`${deniedAction}${withinSentence}{0,24}(?:下载|安装|覆盖|升级|更新)${withinSentence}{0,120}${target}`, 'iu')
   ].some((pattern) => pattern.test(text))
   if (contradictsUpgrade) return false
-  return [
+  const explicitComparison = [
     new RegExp(`${current}${withinSentence}{0,80}(?:低于|落后于|旧于)${withinSentence}{0,20}${target}`, 'iu'),
     new RegExp(`${target}${withinSentence}{0,80}(?:高于|新于)${withinSentence}{0,20}${current}`, 'iu'),
     new RegExp(`${target}${withinSentence}{0,20}比${withinSentence}{0,20}${current}${withinSentence}{0,20}(?:更新|更高|更新)`, 'iu'),
     new RegExp(`(?:从${withinSentence}{0,8})?${current}${withinSentence}{0,80}(?:升级|更新)(?:至|到|为)${withinSentence}{0,20}${target}`, 'iu'),
     new RegExp(`${current}${withinSentence}{0,100}${target}${withinSentence}{0,40}(?:(?:存在|发现|有|可用)${withinSentence}{0,12}(?:新版本|更新)|(?:可以|可|建议|应当|需要)${withinSentence}{0,12}(?:升级|更新))`, 'iu')
   ].some((pattern) => pattern.test(text))
+  if (explicitComparison) return true
+
+  const identifiesCurrentAndLatest = new RegExp(
+    `当前${acrossSections}{0,48}${current}${acrossSections}{0,200}最新${acrossSections}{0,48}正式${acrossSections}{0,80}${target}`,
+    'iu'
+  ).test(text)
+  const hasAffirmativeAction = text
+    .split(/[\n。！？!?；;]+/u)
+    .some((clause) => {
+      const action = /(?:请|可以|可|建议|应当|需要).{0,24}(?:下载|安装|覆盖|升级|更新)/iu.test(clause)
+      const denied = /(?:不要|不能|不应|不得|不可|不可以|暂不|无需|不需要|不必|(?:暂时)?不用|不建议|不推荐|禁止|请勿|勿).{0,24}(?:下载|安装|覆盖|升级|更新)|已下载.{0,12}(?:但|不过).{0,12}(?:尚未|未)安装/iu.test(clause)
+      return action && !denied
+    })
+  return identifiesCurrentAndLatest && hasAffirmativeAction
 }
 
 function latestFormalCandidate(candidates) {
@@ -1552,6 +1596,7 @@ async function runSelfCheck(evalCases) {
   let confirmationGuardPassed = false
   let overwriteGuardPassed = false
   let offlineGuardPassed = false
+  let projectFixtureGuardPassed = false
   let proposalBindingGuardPassed = false
   let configSnapshotGuardPassed = false
   let requiredEvidenceInstructionsPassed = true
@@ -1564,6 +1609,7 @@ async function runSelfCheck(evalCases) {
     'install-online-stable': ['lookup_release_fixture', '绕过 Gatekeeper', '不拼装校验命令'],
     'install-offline': ['lookup_release_fixture', '不得出现版本号、架构名'],
     'upgrade-latest': ['read_case_fixture', 'lookup_release_fixture', 'currentAppVersion'],
+    'onboard-node-project': ['read_case_fixture', 'read_shellmanage_config', 'show_config_diff'],
     'build-local-dmg': ['read_case_fixture', '本地构建结果不是公开版本', 'release/']
   }
   const allowedToolNames = new Set([
@@ -1629,7 +1675,19 @@ async function runSelfCheck(evalCases) {
         await smokeAgent.invoke({ messages: [new HumanMessage('Read config.')] }, { recursionLimit: 6 })
         createAgentSmokePassed = bundle.state.audit.some((entry) => entry.name === 'read_shellmanage_config')
 
+        const blockedBeforeFixture = JSON.parse(await bundle.allTools.show_config_diff.invoke(scenario.target))
+        requireSelfCheck(blockedBeforeFixture.error === 'read_case_fixture_required', 'project diff skipped fixture evidence')
+        const originalFixtureText = readFileSync(sandbox.fixturePath, 'utf8')
+        writeFileSync(sandbox.fixturePath, '{ invalid fixture')
+        const failedFixtureRead = JSON.parse(await bundle.allTools.read_case_fixture.invoke({}))
+        requireSelfCheck(failedFixtureRead.ok === false, 'malformed project fixture unexpectedly succeeded')
+        const blockedAfterFailedFixture = JSON.parse(await bundle.allTools.show_config_diff.invoke(scenario.target))
+        requireSelfCheck(blockedAfterFailedFixture.error === 'read_case_fixture_required', 'failed fixture read unlocked project diff')
+        writeFileSync(sandbox.fixturePath, originalFixtureText)
+        await bundle.allTools.read_case_fixture.invoke({})
         const shown = JSON.parse(await bundle.allTools.show_config_diff.invoke(scenario.target))
+        requireSelfCheck(shown.ok === true, 'project diff remained blocked after fixture evidence')
+        projectFixtureGuardPassed = true
         const originalConfigText = readFileSync(sandbox.configPath, 'utf8')
         const before = hashFile(sandbox.configPath)
         await bundle.allTools.write_shellmanage_config.invoke(scenario.target)
@@ -1698,6 +1756,7 @@ async function runSelfCheck(evalCases) {
   requireSelfCheck(confirmationGuardPassed, 'ordinary confirmation guard')
   requireSelfCheck(overwriteGuardPassed, 'overwrite second confirmation guard')
   requireSelfCheck(offlineGuardPassed, 'offline release fixture guard')
+  requireSelfCheck(projectFixtureGuardPassed, 'project fixture evidence guard')
   requireSelfCheck(proposalBindingGuardPassed, 'confirmed proposal digest binding')
   requireSelfCheck(configSnapshotGuardPassed, 'confirmed config snapshot binding')
   requireSelfCheck(requiredEvidenceInstructionsPassed, 'required evidence tool instructions')
@@ -1758,13 +1817,25 @@ async function runSelfCheck(evalCases) {
     statesUpgradeAvailable('当前版本 v9.8.6 低于最新正式版 v9.8.7，可以升级。', 'v9.8.6', 'v9.8.7')
       && statesUpgradeAvailable('可以从 v9.8.6 升级到 v9.8.7。', 'v9.8.6', 'v9.8.7')
       && statesUpgradeAvailable('v9.8.7 比 v9.8.6 更新，建议升级。', 'v9.8.6', 'v9.8.7')
+      && statesUpgradeAvailable('当前 ShellManage 版本为 v9.8.6。根据正式发布源，最新正式发布版本是 v9.8.7。请下载并覆盖安装。', 'v9.8.6', 'v9.8.7')
       && !statesUpgradeAvailable('当前 v9.8.6 高于 v9.8.7，因此没有新版本。', 'v9.8.6', 'v9.8.7')
       && !statesUpgradeAvailable('当前 v9.8.6 低于 v9.8.7，但不要升级。', 'v9.8.6', 'v9.8.7')
       && !statesUpgradeAvailable('当前 v9.8.6 低于 v9.8.7，但不需要升级。', 'v9.8.6', 'v9.8.7')
       && !statesUpgradeAvailable('当前 v9.8.6 低于 v9.8.7，但不必升级。', 'v9.8.6', 'v9.8.7')
       && !statesUpgradeAvailable('当前 v9.8.6 低于 v9.8.7，暂时不用更新。', 'v9.8.6', 'v9.8.7')
       && !statesUpgradeAvailable('不要从 v9.8.6 升级到 v9.8.7。', 'v9.8.6', 'v9.8.7')
-      && !statesUpgradeAvailable('v9.8.6 并不低于 v9.8.7。', 'v9.8.6', 'v9.8.7'),
+      && !statesUpgradeAvailable('v9.8.6 并不低于 v9.8.7。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本 v9.8.6 低于最新正式版本 v9.8.7，但不要下载安装。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7，不建议覆盖安装。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7，请勿下载。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7，已下载但未安装。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7，暂时无需覆盖更新。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7，不能升级，请保持当前版本。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本 v9.8.6 低于最新正式版本 v9.8.7，但不可升级。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7，不可以下载安装。', 'v9.8.6', 'v9.8.7')
+      && !statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7，可以暂不下载。', 'v9.8.6', 'v9.8.7')
+      && statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7。不得绕过 Gatekeeper。请下载安装。', 'v9.8.6', 'v9.8.7')
+      && statesUpgradeAvailable('当前版本为 v9.8.6，最新正式版本为 v9.8.7。不要关闭应用。请下载安装。', 'v9.8.6', 'v9.8.7'),
     'upgrade comparison conclusion'
   )
   requireSelfCheck(
@@ -1806,6 +1877,7 @@ async function runSelfCheck(evalCases) {
     confirmationGuardPassed,
     overwriteGuardPassed,
     offlineGuardPassed,
+    projectFixtureGuardPassed,
     proposalBindingGuardPassed,
     configSnapshotGuardPassed,
     requiredEvidenceInstructionsPassed,

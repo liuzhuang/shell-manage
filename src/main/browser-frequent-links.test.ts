@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { BrowserFrequentLinks, normalizeFrequentLinkUrl } from './browser-frequent-links'
 
-test('BrowserFrequentLinks sorts by open plus visit frequency', () => {
+test('BrowserFrequentLinks sorts by open plus visit frequency', (t) => {
+  t.mock.method(Date, 'now', () => 1)
   const links = new BrowserFrequentLinks()
 
   links.recordOpen('https://example.com/a', 'A')
