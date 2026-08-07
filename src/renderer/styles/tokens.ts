@@ -189,34 +189,34 @@ export const themePalettes = {
     label: '程序员',
     dark: {
       bg: {
-        app: '#0b1020',
-        panel: '#111827',
-        panelSoft: '#1f2937',
-        surface: '#1f2937',
-        hover: '#223247',
-        active: '#2a3d56'
+        app: '#181818',
+        panel: '#232323',
+        panelSoft: '#282828',
+        surface: '#2d2d2d',
+        hover: 'rgba(255, 255, 255, 0.078)',
+        active: 'rgba(255, 255, 255, 0.12)'
       },
       text: {
-        primary: '#e5e7eb',
-        secondary: '#9ca3af',
-        tertiary: '#6b7280',
-        disabled: '#4b5563'
+        primary: 'rgba(255, 255, 255, 0.88)',
+        secondary: 'rgba(255, 255, 255, 0.71)',
+        tertiary: 'rgba(255, 255, 255, 0.498)',
+        disabled: 'rgba(255, 255, 255, 0.498)'
       },
       border: {
-        subtle: '#1f2937',
-        default: '#374151',
-        strong: '#4b5563'
+        subtle: 'rgba(255, 255, 255, 0.042)',
+        default: 'rgba(255, 255, 255, 0.084)',
+        strong: 'rgba(255, 255, 255, 0.156)'
       },
       accent: {
-        base: '#3b82f6',
-        strong: '#1d4ed8',
-        soft: 'rgba(59, 130, 246, 0.14)',
-        ring: '#93c5fd'
+        base: '#339cff',
+        strong: '#83c3ff',
+        soft: '#0d273f',
+        ring: 'rgba(131, 195, 255, 0.76)'
       },
       semantic: {
-        legal: '#60a5fa',
-        premiumLuxe: '#8b5cf6',
-        premiumPlus: '#ec4899'
+        legal: '#83c3ff',
+        premiumLuxe: '#ad7bf9',
+        premiumPlus: '#ff66ad'
       }
     },
     light: {
@@ -253,11 +253,11 @@ export const themePalettes = {
     },
     status: {
       dark: {
-        running: '#60a5fa',
-        success: '#22c55e',
-        warning: '#f59e0b',
-        error: '#ef4444',
-        queued: '#9ca3af'
+        running: '#339cff',
+        success: '#40c977',
+        warning: '#ff8549',
+        error: '#ff6764',
+        queued: 'rgba(255, 255, 255, 0.498)'
       },
       light: {
         running: '#3b82f6',

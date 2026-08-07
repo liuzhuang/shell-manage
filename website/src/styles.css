@@ -114,8 +114,20 @@ a {
   color: var(--blue);
 }
 
-.site-header .button {
+.site-header .github-link {
   justify-self: end;
+  display: inline-flex;
+  color: #f5f5f7;
+}
+
+.site-header .github-link:hover {
+  color: var(--blue);
+}
+
+.site-header .github-link svg {
+  width: 24px;
+  height: 24px;
+  fill: currentColor;
 }
 
 .button {
@@ -140,12 +152,16 @@ a {
   width: var(--content);
   margin: 12px auto 0;
   padding: clamp(5rem, 8vw, 7rem) clamp(1.5rem, 5vw, 5rem);
-  background: var(--surface);
+  background: #0b0b0c;
   text-align: center;
 }
 
 .skill-section .section-heading {
-  margin-bottom: 2rem;
+  margin-bottom: clamp(3rem, 5vw, 4rem);
+}
+
+.skill-section .section-heading h2 {
+  text-wrap: balance;
 }
 
 .skill-section .section-heading > p:last-child {
@@ -155,33 +171,60 @@ a {
 }
 
 .onboarding-steps {
-  display: grid;
-  max-width: 920px;
+  position: relative;
+  max-width: 1120px;
   margin: 0 auto;
-  border-top: 1px solid var(--line);
+  padding: 0;
+  list-style: none;
+}
+
+.onboarding-steps::before {
+  content: "";
+  position: absolute;
+  top: 1.25rem;
+  bottom: 1.25rem;
+  left: 1.25rem;
+  width: 1px;
+  background: #48484a;
 }
 
 .onboarding-step {
-  padding: 2rem 0;
-  border-bottom: 1px solid var(--line);
+  padding: 0 0 2.75rem 5.25rem;
   text-align: left;
 }
 
+.onboarding-step + .onboarding-step {
+  padding-top: 2.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.onboarding-step:last-child {
+  padding-bottom: 0;
+}
+
 .onboarding-step__heading {
-  display: flex;
-  align-items: baseline;
-  gap: 1rem;
+  position: relative;
 }
 
 .onboarding-step__heading > span {
-  color: var(--muted);
+  position: absolute;
+  top: -0.35rem;
+  left: -5.25rem;
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  place-items: center;
+  border: 1px solid #6e6e73;
+  border-radius: 50%;
+  background: #1d1d1f;
+  color: #f5f5f7;
   font-size: 0.78rem;
   font-weight: 600;
-  letter-spacing: 0.08em;
 }
 
 .onboarding-step h3 {
   margin: 0;
+  color: var(--ink);
   font-size: clamp(1.25rem, 1.8vw, 1.55rem);
   font-weight: 500;
 }
@@ -191,33 +234,41 @@ a {
   color: var(--muted);
 }
 
-.onboarding-step > .button,
 .onboarding-step__actions {
-  margin-top: 1.25rem;
-}
-
-.onboarding-step__actions {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
+  margin-top: 0.75rem;
 }
 
 .onboarding-step__actions > a {
-  color: var(--blue);
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  color: #d2d2d7;
   font-size: 0.88rem;
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+.onboarding-step__actions > a:hover {
+  color: #fff;
 }
 
 .import-instruction {
+  position: relative;
   margin-top: 1.25rem;
-  padding: 1rem 1.15rem;
+  padding: 1rem 8.5rem 1rem 1.15rem;
   overflow-wrap: anywhere;
   border: 1px solid var(--line);
   border-radius: 0.75rem;
-  background: #0b0b0c;
+  background: #050506;
   color: var(--ink);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 0.84rem;
   line-height: 1.7;
+}
+
+.import-instruction__content {
+  display: grid;
+  gap: 0.25rem;
 }
 
 .import-instruction a {
@@ -226,11 +277,51 @@ a {
   text-underline-offset: 0.16em;
 }
 
+.instruction-copy {
+  position: absolute;
+  top: 50%;
+  right: 0.65rem;
+  display: inline-flex;
+  min-height: 32px;
+  padding: 0.4rem 0.7rem;
+  transform: translateY(-50%);
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.045);
+  color: #a1a1a6;
+  cursor: pointer;
+  font: inherit;
+  font-family: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.instruction-copy img {
+  width: 1rem;
+  height: 1rem;
+  opacity: 0.8;
+}
+
+.instruction-copy:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: #2c2c2e;
+  color: #fff;
+}
+
+.instruction-copy:active {
+  transform: translateY(-50%) scale(0.98);
+}
+
 .copy-status {
-  min-height: 1.5rem;
   margin: 0.5rem 0 0;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.copy-status:empty {
+  display: none;
 }
 
 .button:hover {
@@ -239,12 +330,6 @@ a {
 
 .button:active {
   transform: scale(0.98);
-}
-
-.button--compact {
-  min-height: 30px;
-  padding: 0.4rem 0.85rem;
-  font-size: 0.72rem;
 }
 
 .hero {
@@ -327,6 +412,10 @@ a {
   background: var(--soft);
   pointer-events: none;
   user-select: none;
+}
+
+.product-shot picture {
+  display: block;
 }
 
 .screenshot-lens {
@@ -589,6 +678,14 @@ a {
 
   .skill-section {
     padding: 5rem 1.25rem;
+  }
+
+  .onboarding-step {
+    padding-left: 3.75rem;
+  }
+
+  .onboarding-step__heading > span {
+    left: -3.75rem;
   }
 
   .section-heading {

@@ -1,26 +1,39 @@
 import { expect, test } from '@playwright/test'
 
 const downloadUrl = 'https://github.com/liuzhuang/shell-manage/releases'
+const githubUrl = 'https://github.com/liuzhuang/shell-manage'
 const lensPointerOffset = 48
 
 test.describe('ShellManage 官网', () => {
   test('首页说明核心用途并提供下载入口', async ({ page }) => {
     await page.goto('/')
 
+    await expect(page).toHaveTitle('ShellManage — VibeCoding 项目启动与日志管理')
+    await expect(page.locator('meta[name="description"]')).toHaveAttribute(
+      'content',
+      'ShellManage 面向同时维护多个 VibeCoding 项目的使用者。保存启动命令、SSH 隧道和重复操作，需要时直接运行，并在同一处查看状态和日志。'
+    )
     await expect(page.getByTestId('site-header')).toContainText('ShellManage')
     await expect(page.getByTestId('home-page')).toBeVisible()
 
     const hero = page.getByTestId('hero')
-    await expect(hero).toContainText('For Vibe Coding')
-    await expect(hero.getByRole('heading', { level: 1 })).toHaveText('好记性不如烂笔头')
-    await expect(hero).toContainText('一次保存（启动命令、SSH 隧道），多次运行，实时查看状态和日志。')
+    await expect(hero).toContainText('For VibeCoding')
+    await expect(hero.getByRole('heading', { level: 1 })).toHaveText('VibeCoding 项目多，也不用重复敲命令')
+    await expect(hero).toContainText('把每个项目的启动命令、SSH 隧道和其他重复操作保存一次。以后打开 ShellManage，点击就能运行，状态和日志也都在同一处。')
 
     const downloadButtons = page.getByTestId('download-button')
-    await expect(downloadButtons).toHaveCount(4)
-    for (const button of await downloadButtons.all()) {
-      await expect(button).toHaveAttribute('href', downloadUrl)
-    }
+    await expect(downloadButtons).toHaveCount(3)
+    await expect(downloadButtons.filter({ hasText: /^查看安装方法$/ })).toHaveCount(2)
+    for (const button of await downloadButtons.filter({ hasText: /^查看安装方法$/ }).all())
+      await expect(button).toHaveAttribute('href', '#getting-started')
     await expect(downloadButtons.filter({ hasText: '手动下载安装' })).toHaveCount(1)
+    await expect(downloadButtons.filter({ hasText: '手动下载安装' })).toHaveAttribute('href', downloadUrl)
+    await expect(page.locator('.site-nav a', { hasText: '安装' })).toHaveAttribute('href', '#getting-started')
+    await expect(page.getByTestId('github-link')).toHaveAttribute('href', githubUrl)
+    await expect(page.getByTestId('github-link')).toHaveAttribute('target', '_blank')
+    await expect(page.getByTestId('github-link')).toHaveAttribute('rel', 'noreferrer')
+    await expect(page.getByTestId('github-link').locator('svg')).toBeVisible()
+    await expect(page.locator('.brand img').first()).toHaveAttribute('src', /^data:image\/webp/)
   })
 
   test('首页按三组展示九张产品截图', async ({ page }) => {
@@ -33,9 +46,15 @@ test.describe('ShellManage 官网', () => {
 
     const images = page.locator('.product-shot img')
     await expect(images).toHaveCount(9)
+    await expect(page.locator('.product-shot source')).toHaveCount(9)
+    await expect(page.locator('.screenshot-dialog img')).toHaveCount(0)
+    const expectedPreviewWidth = page.viewportSize()!.width <= 640 ? '-960-' : '-1920-'
     for (const image of await images.all()) {
       await image.scrollIntoViewIfNeeded()
       await expect(image).toHaveAttribute('alt', /\S+/)
+      await expect(image).toHaveAttribute('src', /\.webp$/)
+      expect(await image.evaluate((element) => (element as HTMLImageElement).currentSrc))
+        .toContain(expectedPreviewWidth)
       expect(await image.evaluate((element) => {
         const target = element as HTMLImageElement
         return target.complete && target.naturalWidth > 0 && target.naturalHeight > 0
@@ -47,7 +66,7 @@ test.describe('ShellManage 官网', () => {
     for (const image of await deferredImages.all()) await expect(image).toHaveAttribute('loading', 'lazy')
   })
 
-  test('三步上手安装使用区域复制 Agent 提示词并公开对应文档', async ({ page, request }) => {
+  test('三步上手区域复制 Agent 说明并公开对应文档', async ({ page, request }) => {
     await page.addInitScript(() => {
       Object.defineProperty(navigator, 'clipboard', {
         configurable: true,
@@ -60,31 +79,33 @@ test.describe('ShellManage 官网', () => {
 
     const guideUrl = new URL('/doc/shell-manage-assistant.md', page.url()).href
     const installGuideUrl = new URL('/doc/install.md', page.url()).href
-    const installInstruction = `请阅读 ${installGuideUrl}，按照文档下载并安装 ShellManage。`
+    const installInstruction = `请阅读 ${installGuideUrl}，并按照文档指导我下载和安装 ShellManage。`
     const importInstruction =
-      `请阅读 ${guideUrl}，按照文档分析当前项目，并将验证通过的启动命令导入 ShellManage。`
+      `请阅读 ${guideUrl}，分析并验证当前项目的启动方式。写入前请展示准备修改的内容，得到确认后再将命令导入 ShellManage。`
     const section = page.getByTestId('getting-started')
-    await expect(section.getByText('三步上手安装使用', { exact: true })).toBeVisible()
+    await expect(section.getByText('三步上手', { exact: true })).toBeVisible()
     await expect(section.locator('.onboarding-step')).toHaveCount(3)
-    await expect(section.getByRole('heading', { name: 'Agent 一键接入' })).toBeVisible()
-    await expect(section.getByRole('heading', { name: '添加命令', exact: true })).toBeVisible()
-    await expect(section.getByRole('heading', { name: '点击启动新命令' })).toBeVisible()
-    await expect(section.getByTestId('install-instruction')).toHaveText(installInstruction)
-    await expect(section.getByTestId('import-instruction')).toHaveText(importInstruction)
+    await expect(section.getByRole('heading', { name: '安装 ShellManage', exact: true })).toBeVisible()
+    await expect(section.getByRole('heading', { name: '导入项目启动方式', exact: true })).toBeVisible()
+    await expect(section.getByRole('heading', { name: '启动并查看日志' })).toBeVisible()
+    await expect(section.getByTestId('install-instruction').locator('.import-instruction__content')).toContainText(installGuideUrl)
+    await expect(section.getByTestId('import-instruction').locator('.import-instruction__content')).toContainText(guideUrl)
     await expect(section.getByTestId('install-instruction').getByRole('link')).toHaveAttribute('href', installGuideUrl)
     await expect(section.getByTestId('install-instruction').getByRole('link')).toHaveAttribute('target', '_blank')
     await expect(section.getByTestId('import-instruction').getByRole('link')).toHaveAttribute('href', guideUrl)
     await expect(section.getByTestId('import-instruction').getByRole('link')).toHaveAttribute('target', '_blank')
-    await expect(section.getByTestId('install-instruction-copy')).toHaveText('复制提示词')
-    await expect(section.getByTestId('import-instruction-copy')).toHaveText('复制提示词')
+    await expect(section.getByTestId('install-instruction').getByTestId('install-instruction-copy')).toBeVisible()
+    await expect(section.getByTestId('import-instruction').getByTestId('import-instruction-copy')).toBeVisible()
+    await expect(section.getByTestId('install-instruction-copy')).toHaveText('复制安装说明')
+    await expect(section.getByTestId('import-instruction-copy')).toHaveText('复制导入说明')
 
     await section.getByTestId('install-instruction-copy').click()
-    await expect(section.getByTestId('install-instruction-copy')).toHaveText('已复制，请发送给 Agent')
+    await expect(section.getByTestId('install-instruction-copy')).toHaveText('已复制')
     expect(await page.evaluate(() => window.localStorage.getItem('copied-text'))).toBe(installInstruction)
     await expect(section.getByRole('link', { name: '手动下载安装', exact: true })).toHaveAttribute('href', downloadUrl)
 
     await section.getByTestId('import-instruction-copy').click()
-    await expect(section.getByTestId('import-instruction-copy')).toHaveText('已复制，请发送给 Agent')
+    await expect(section.getByTestId('import-instruction-copy')).toHaveText('已复制')
     expect(await page.evaluate(() => window.localStorage.getItem('copied-text'))).toBe(importInstruction)
 
     const guide = await request.get('/doc/shell-manage-assistant.md')
@@ -124,8 +145,10 @@ test.describe('ShellManage 官网', () => {
     await screenshot.click()
     const dialog = page.getByRole('dialog', { name: /查看大图/ })
     await expect(dialog).toBeVisible()
+    await expect(dialog.locator('img')).toHaveAttribute('src', /\.png$/)
     await dialog.getByRole('button', { name: '关闭' }).click()
     await expect(dialog).not.toBeVisible()
+    await expect(dialog.locator('img')).toHaveCount(0)
   })
 
   test('术语速查同时保留技术名称和解释', async ({ page }) => {

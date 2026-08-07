@@ -85,7 +85,7 @@ function createWindow(): void {
     show: false,
     width: 1320,
     height: 860,
-    backgroundColor: '#121417',
+    backgroundColor: '#181818',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : undefined,
     ...(process.platform !== 'darwin'
       ? {

@@ -1317,6 +1317,7 @@ function useTerminalSession(args: {
     const host = hostRef.current
     if (!enabled || !host) return
     if (terminalRef.current) return
+    const background = getComputedStyle(host.parentElement ?? host).backgroundColor
 
     const terminal = new Terminal({
       cursorBlink: true,
@@ -1326,7 +1327,7 @@ function useTerminalSession(args: {
       convertEol: false,
       scrollback: 12000,
       theme: {
-        background: '#090d14',
+        background,
         foreground: '#d8dee9',
         cursor: '#7aa2f7'
       }
