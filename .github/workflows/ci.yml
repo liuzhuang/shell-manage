@@ -31,25 +31,26 @@ jobs:
       - run: npm run test:skill-agent
       - run: npm run build
 
-  e2e:
-    name: Electron E2E
-    if: github.event_name == 'push'
-    needs: checks
-    runs-on: ${{ github.repository == 'liuzhuang/test-shell' && 'test-shell' || 'macos-latest' }}
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: ${{ github.repository != 'liuzhuang/test-shell' && 'npm' || '' }}
-      - run: npm ci
-      - name: Prepare Electron for self-hosted E2E
-        if: github.repository == 'liuzhuang/test-shell'
-        run: |
-          node node_modules/electron/install.js
-          xattr -cr node_modules/electron/dist/Electron.app
-          codesign --force --deep --sign - node_modules/electron/dist/Electron.app
-          test -x node_modules/electron/dist/Electron.app/Contents/MacOS/Electron
-      - run: npm run test:e2e
-        env:
-          SHELL_MANAGE_E2E_SKIP_PERFORMANCE: '1'
+  # Electron E2E is run locally instead of allocating a CI runner.
+  # e2e:
+  #   name: Electron E2E
+  #   if: github.event_name == 'push'
+  #   needs: checks
+  #   runs-on: ${{ github.repository == 'liuzhuang/test-shell' && 'test-shell' || 'macos-latest' }}
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #     - uses: actions/setup-node@v5
+  #       with:
+  #         node-version: 22
+  #         cache: ${{ github.repository != 'liuzhuang/test-shell' && 'npm' || '' }}
+  #     - run: npm ci
+  #     - name: Prepare Electron for self-hosted E2E
+  #       if: github.repository == 'liuzhuang/test-shell'
+  #       run: |
+  #         node node_modules/electron/install.js
+  #         xattr -cr node_modules/electron/dist/Electron.app
+  #         codesign --force --deep --sign - node_modules/electron/dist/Electron.app
+  #         test -x node_modules/electron/dist/Electron.app/Contents/MacOS/Electron
+  #     - run: npm run test:e2e
+  #       env:
+  #         SHELL_MANAGE_E2E_SKIP_PERFORMANCE: '1'
