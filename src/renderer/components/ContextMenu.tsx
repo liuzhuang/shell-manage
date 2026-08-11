@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+export interface ContextMenuAnchor {
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
 export interface ContextMenuItem {
   key: string
   label: string
-  onClick: () => void
+  onClick: (anchor?: ContextMenuAnchor) => void
+  hasPopup?: 'dialog'
   tone?: 'normal' | 'warn' | 'danger'
   group?: string
 }
@@ -12,11 +20,15 @@ export function ContextMenu({
   x,
   y,
   items,
+  expandedPopupKey,
+  onEscape,
   onClose
 }: {
   x: number
   y: number
   items: ContextMenuItem[]
+  expandedPopupKey?: string
+  onEscape?: () => void
   onClose: () => void
 }) {
   const menuWidth = 310
@@ -54,8 +66,10 @@ export function ContextMenu({
   useEffect(() => {
     const handler = () => onClose()
     const keyHandler = (event: KeyboardEvent) => {
+      if (!menuRef.current?.contains(document.activeElement)) return
       if (event.key === 'Escape') {
         onClose()
+        onEscape?.()
         return
       }
       if (orderedItems.length === 0) return
@@ -83,8 +97,8 @@ export function ContextMenu({
         const target = orderedItems[activeIndex]
         if (!target) return
         event.preventDefault()
-        target.onClick()
-        onClose()
+        target.onClick(itemRefs.current[activeIndex]?.getBoundingClientRect())
+        if (!target.hasPopup) onClose()
       }
     }
     window.addEventListener('click', handler)
@@ -95,7 +109,7 @@ export function ContextMenu({
       window.removeEventListener('contextmenu', handler)
       window.removeEventListener('keydown', keyHandler)
     }
-  }, [activeIndex, onClose, orderedItems])
+  }, [activeIndex, onClose, onEscape, orderedItems])
 
   return (
     <div
@@ -134,11 +148,14 @@ export function ContextMenu({
                   itemRefs.current[indexByKey[item.key]] = el
                 }}
                 role="menuitem"
+                data-testid={`command-context-item-${item.key}`}
+                aria-haspopup={item.hasPopup}
+                aria-expanded={item.hasPopup ? expandedPopupKey === item.key : undefined}
                 tabIndex={active ? 0 : -1}
                 onClick={(event) => {
                   event.stopPropagation()
-                  item.onClick()
-                  onClose()
+                  item.onClick(event.currentTarget.getBoundingClientRect())
+                  if (!item.hasPopup) onClose()
                 }}
                 onMouseEnter={() => {
                   setActiveIndex(indexByKey[item.key])

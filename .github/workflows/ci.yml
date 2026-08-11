@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Typecheck, unit tests and build
+    name: Typecheck and build
     runs-on: ${{ github.repository == 'liuzhuang/test-shell' && 'test-shell' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
@@ -25,7 +25,8 @@ jobs:
           cache: ${{ github.repository != 'liuzhuang/test-shell' && 'npm' || '' }}
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run test:unit
+      # Unit tests are run locally to avoid duplicate private/public CI execution.
+      # - run: npm run test:unit
       - run: npm run test:skill
       - run: npm run test:skill-agent
       - run: npm run build

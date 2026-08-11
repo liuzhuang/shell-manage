@@ -46,6 +46,12 @@ export function resolveServiceArgs(shellExec: string, command: string): string[]
   return ['/d', '/s', '/c', command]
 }
 
+export function extractLeadingWorkingDirectory(command: string): string | undefined {
+  const matched = command.match(/^\s*cd\s+("([^"]+)"|'([^']+)'|([^\s&;]+))\s*&&/)
+  const raw = matched?.[2] || matched?.[3] || matched?.[4]
+  return raw?.trim() || undefined
+}
+
 function resolveWindowsShell(): string {
   const powershell7Candidates = [
     'C:\\Program Files\\PowerShell\\7\\pwsh.exe',

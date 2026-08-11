@@ -14,7 +14,7 @@ import { MultiLogPage } from './pages/MultiLogPage'
 import { MonitoringPage } from './pages/MonitoringPage'
 import { BrowserPage } from './pages/BrowserPage'
 import { Toast } from './components/Toast'
-import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
+import { ContextMenu, type ContextMenuAnchor, type ContextMenuItem } from './components/ContextMenu'
 import { PresetProgressOverlay } from './components/PresetProgressOverlay'
 import { projectKey } from './components/ImportProjectsPanel'
 import { DEMO_COMMAND_NAMES, DEMO_COMMANDS, DEMO_PRESETS, DEMO_PRESET_NAMES } from './lib/demoCommands'
@@ -38,6 +38,8 @@ import type {
   AppUpdateBroadcastPayload,
   AppUpdateDisabledReason,
   CommandConfig,
+  CommandPublicAccessProvider,
+  CommandPublicAccessStatusPayload,
   DetectedProject,
   LogViewPreset,
   ProcessStatusPayload,
@@ -156,6 +158,13 @@ export default function App() {
   const [presetProgress, setPresetProgress] = useState<PresetProgressPayload | null>(null)
   const [locateLine, setLocateLine] = useState<number | undefined>(undefined)
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; commandName: string } | null>(null)
+  const [publicAccessMenu, setPublicAccessMenu] = useState<{
+    commandName: string
+    anchor: ContextMenuAnchor
+  } | null>(null)
+  const [publicAccessStatusMap, setPublicAccessStatusMap] = useState<
+    Record<string, Partial<Record<CommandPublicAccessProvider, CommandPublicAccessStatusPayload>>>
+  >({})
   const [commandForm, setCommandForm] = useState<CommandFormState | null>(null)
   const [showDemoHint, setShowDemoHint] = useState<boolean>(() => window.localStorage.getItem(DEMO_HINT_SEEN_KEY) !== '1')
   const [showBatchLogModal, setShowBatchLogModal] = useState(false)
@@ -504,12 +513,15 @@ export default function App() {
         onTrackAction: trackFeatureAction,
         onEditCommand: openCommandFormForEdit,
         onDeleteCommand: deleteCommandFromConfig,
-        onOpenInBrowser: openInBrowser
+        onOpenInBrowser: openInBrowser,
+        onOpenPublicAccess: (anchor) => {
+          if (anchor) setPublicAccessMenu({ commandName: payload.commandName, anchor })
+        }
       })
       if (payload.preferNative && window.api.getPlatform() === 'darwin') {
         try {
           const result = await window.api.showCommandContextMenu(
-            items.map((item) => ({
+            items.filter((item) => !item.hasPopup).map((item) => ({
               key: item.key,
               label: item.label,
               group: item.group
@@ -553,6 +565,20 @@ export default function App() {
 
   useEffect(() => {
     void window.api.getAppVersion().then(setAppVersion).catch(() => setAppVersion(''))
+  }, [])
+
+  useEffect(() => {
+    const mergeStatus = (payload: CommandPublicAccessStatusPayload) => {
+      setPublicAccessStatusMap((current) => ({
+        ...current,
+        [payload.commandName]: { ...current[payload.commandName], [payload.provider]: payload }
+      }))
+    }
+    const offStatus = window.api.onCommandPublicAccessStatus(mergeStatus)
+    void window.api.commandPublicAccessList().then((items) => items.forEach(mergeStatus)).catch(() => {})
+    return () => {
+      offStatus?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -1531,6 +1557,8 @@ export default function App() {
           config={config}
           statusMap={statusMap}
           terminalStatusMap={terminalStatusMap}
+          publicAccessStatusMap={publicAccessStatusMap}
+          publicAccessRequest={publicAccessMenu}
           tags={tags}
           activeTag={activeTag}
           keyword={keyword}
@@ -1575,6 +1603,8 @@ export default function App() {
             void openCommandContextMenu(payload)
           }}
           onActionError={(message) => notify(`指令执行失败：${message}`, 'error')}
+          onNotify={notify}
+          onClosePublicAccess={() => setPublicAccessMenu(null)}
           onBeginImportDirectory={beginImportDirectoryFromCreate}
           onBeginDemoImport={beginDemoImportFromCreate}
           importDetecting={importDetecting}
@@ -1856,6 +1886,13 @@ export default function App() {
         <ContextMenu
           x={contextMenu.x}
           y={contextMenu.y}
+          expandedPopupKey={publicAccessMenu?.commandName === contextMenu.commandName ? 'publish' : undefined}
+          onEscape={() => {
+            const commandName = contextMenu.commandName
+            window.requestAnimationFrame(() => {
+              document.querySelector<HTMLButtonElement>(`[data-testid="command-more-${CSS.escape(commandName)}"]`)?.focus()
+            })
+          }}
           onClose={() => setContextMenu(null)}
           items={buildMenuItems({
             commandName: contextMenu.commandName,
@@ -1870,7 +1907,10 @@ export default function App() {
             onTrackAction: trackFeatureAction,
             onEditCommand: openCommandFormForEdit,
             onDeleteCommand: deleteCommandFromConfig,
-            onOpenInBrowser: openInBrowser
+            onOpenInBrowser: openInBrowser,
+            onOpenPublicAccess: (anchor) => {
+              if (anchor) setPublicAccessMenu({ commandName: contextMenu.commandName, anchor })
+            }
           })}
         />
       )}
@@ -2037,6 +2077,7 @@ function buildMenuItems(params: {
   onEditCommand: (commandName: string) => void
   onDeleteCommand: (commandName: string) => Promise<void>
   onOpenInBrowser: (request: { url?: string; referrerCommand?: string }) => void
+  onOpenPublicAccess: (anchor?: ContextMenuAnchor) => void
 }): ContextMenuItem[] {
   const {
     commandName,
@@ -2051,7 +2092,8 @@ function buildMenuItems(params: {
     commandLogs,
     onEditCommand,
     onDeleteCommand,
-    onOpenInBrowser
+    onOpenInBrowser,
+    onOpenPublicAccess
   } = params
   const commandConfig = commands.find((item) => item.name === commandName)
   const terminalRunning = terminalStatusMap[commandName] === 'running'
@@ -2094,6 +2136,16 @@ function buildMenuItems(params: {
             }
           } satisfies ContextMenuItem
         ]),
+    {
+      key: 'publish',
+      label: '发布',
+      group: '快捷运行',
+      hasPopup: 'dialog',
+      onClick: (anchor) => {
+        onTrackAction('context_menu.command.publish', 'click', 'success')
+        onOpenPublicAccess(anchor)
+      }
+    },
     {
       key: 'open-web',
       label: '打开网站（Chrome）',

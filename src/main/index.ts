@@ -12,6 +12,7 @@ import { normalizeRuntimeEnv } from './shell-runtime'
 import { TrayManager } from './tray-manager'
 import { setupApplicationMenu } from './app-menu'
 import { captureLangSmithEnvironment } from './langsmith-env'
+import { CommandPublicAccessManager } from './command-public-access'
 
 captureLangSmithEnvironment()
 
@@ -35,9 +36,20 @@ if (runtimeHome) {
 }
 
 const configLoader = new ConfigLoader()
+let publicAccessManager: CommandPublicAccessManager | undefined
 const processManager = new ProcessManager(
-  (payload) => broadcast('process:status', payload),
+  (payload) => {
+    broadcast('process:status', payload)
+    if (payload.state === 'idle' || payload.state === 'error') {
+      void publicAccessManager?.stopTunnelsForCommand(payload.commandName)
+    }
+  },
   (payload) => broadcast('process:output', payload)
+)
+publicAccessManager = new CommandPublicAccessManager(
+  processManager,
+  (payload) => broadcast('command-public-access:status', payload),
+  join(app.getPath('userData'), 'vercel-deployments.json')
 )
 const llmService = new LlmService()
 const trayManager = new TrayManager()
@@ -140,10 +152,12 @@ app.whenReady().then(async () => {
   currentConfig = configLoader.readParsed()
   syncLaunchAtLogin(currentConfig.settings.launchAtLogin === true)
   processManager.syncConfig(currentConfig.commands)
+  publicAccessManager.syncCommands(currentConfig.commands)
 
   ipcRuntimeControl = registerIpcHandlers(
     configLoader,
     processManager,
+    publicAccessManager,
     llmService,
     () => currentConfig,
     (next) => {
@@ -182,6 +196,7 @@ app.whenReady().then(async () => {
       currentConfig = configLoader.readParsed()
       syncLaunchAtLogin(currentConfig.settings.launchAtLogin === true)
       processManager.syncConfig(currentConfig.commands)
+      publicAccessManager?.syncCommands(currentConfig.commands)
       broadcast('config:loaded', currentConfig)
     } catch (error) {
       broadcast('config:error', { error: error instanceof Error ? error.message : String(error) })
@@ -214,7 +229,11 @@ app.on('before-quit', (event) => {
   isQuitCleanupRunning = true
   void (async () => {
     try {
-      await Promise.allSettled([processManager.stopAllRunning(), ipcRuntimeControl?.shutdown()])
+      await Promise.allSettled([
+        processManager.stopAllRunning(),
+        publicAccessManager?.shutdown(),
+        ipcRuntimeControl?.shutdown()
+      ])
     } finally {
       hasRunQuitCleanup = true
       isQuitCleanupRunning = false

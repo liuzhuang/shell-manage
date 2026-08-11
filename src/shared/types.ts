@@ -630,6 +630,25 @@ export interface ProcessOutputPayload {
   at: number
 }
 
+export type CommandPublicAccessProvider = 'vercel' | 'cpolar' | 'cloudflare'
+
+export type CommandPublicAccessPhase =
+  | 'idle'
+  | 'starting'
+  | 'running'
+  | 'succeeded'
+  | 'stopping'
+  | 'error'
+
+export interface CommandPublicAccessStatusPayload {
+  commandName: string
+  provider: CommandPublicAccessProvider
+  phase: CommandPublicAccessPhase
+  pid?: number
+  url?: string
+  message?: string
+}
+
 export interface QueryOutputPayload {
   line: string
   stream: 'stdout' | 'stderr'

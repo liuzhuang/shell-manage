@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AppConfig, LogViewPreset } from '../../shared/types'
+import type {
+  AppConfig,
+  CommandPublicAccessProvider,
+  CommandPublicAccessStatusPayload,
+  LogViewPreset
+} from '../../shared/types'
 import { type RuntimeStatus } from '../lib/view-models'
 import { buttonStyle, chipStyle, inputStyle } from '../lib/uiStyles'
 import type { CommandCreateStep } from '../components/CommandFormModal'
@@ -11,11 +16,15 @@ import { PlayIcon } from '../components/icons/PlayIcon'
 import { StopIcon } from '../components/icons/StopIcon'
 import { ListIcon } from '../components/icons/ListIcon'
 import { XIcon } from '../components/icons/XIcon'
+import { CommandPublicAccessMenu } from '../components/CommandPublicAccessMenu'
+import type { ContextMenuAnchor } from '../components/ContextMenu'
 
 export function HomePage(props: {
   config: AppConfig
   statusMap: Record<string, RuntimeStatus>
   terminalStatusMap: Record<string, 'running' | 'idle'>
+  publicAccessStatusMap: Record<string, Partial<Record<CommandPublicAccessProvider, CommandPublicAccessStatusPayload>>>
+  publicAccessRequest: { commandName: string; anchor: ContextMenuAnchor } | null
   tags: string[]
   activeTag: string
   keyword: string
@@ -29,6 +38,8 @@ export function HomePage(props: {
   onMarkActiveCommand: (commandName: string) => void
   onOpenContextMenu: (payload: { x: number; y: number; commandName: string; preferNative?: boolean }) => void
   onActionError: (message: string) => void
+  onNotify: (text: string, tone?: 'success' | 'warn' | 'error' | 'info') => void
+  onClosePublicAccess: () => void
   onBeginImportDirectory: (entry: 'pick' | 'shortcut') => Promise<void>
   onBeginDemoImport: (entry: 'pick' | 'shortcut') => void
   importDetecting: boolean
@@ -49,6 +60,8 @@ export function HomePage(props: {
     config,
     statusMap,
     terminalStatusMap,
+    publicAccessStatusMap,
+    publicAccessRequest,
     tags,
     activeTag,
     keyword,
@@ -60,6 +73,8 @@ export function HomePage(props: {
     onMarkActiveCommand,
     onOpenContextMenu,
     onActionError,
+    onNotify,
+    onClosePublicAccess,
     onBeginImportDirectory,
     onBeginDemoImport,
     importDetecting,
@@ -436,6 +451,7 @@ export function HomePage(props: {
                 ? '查看日志'
                 : '启动'
           const statusLabel = isRunning ? (state === 'restarting' ? '正在重启' : '正在运行') : isError ? '运行异常' : '未启动'
+          const publicAccess = publicAccessStatusMap[cmd.name] || {}
           const hasMeta =
             Boolean(status?.pid) ||
             (typeof status?.exitCode === 'number' && !isRunning) ||
@@ -573,6 +589,15 @@ export function HomePage(props: {
                   >
                     ...
                   </button>
+                  <CommandPublicAccessMenu
+                    command={cmd}
+                    commandRunning={isRunning}
+                    statuses={publicAccess}
+                    openRequest={publicAccessRequest?.commandName === cmd.name ? publicAccessRequest.anchor : null}
+                    onClose={onClosePublicAccess}
+                    onNotify={onNotify}
+                    onTrackAction={onTrackAction}
+                  />
                 </div>
 
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, height: 22, alignItems: 'center', overflow: 'hidden' }}>
@@ -675,7 +700,12 @@ export function HomePage(props: {
                   ) : (
                     <span aria-hidden="true" />
                   )}
-                  <div style={{ color: 'var(--muted)', fontSize: 12, textAlign: 'right' }}>{statusLabel}</div>
+                  <div
+                    data-testid={`command-runtime-status-${cmd.name}`}
+                    style={{ color: 'var(--muted)', fontSize: 12, textAlign: 'right' }}
+                  >
+                    {statusLabel}
+                  </div>
                 </div>
               </div>
             </Panel>

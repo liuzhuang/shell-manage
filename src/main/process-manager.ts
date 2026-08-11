@@ -3,7 +3,7 @@ import net from 'node:net'
 import { promisify } from 'node:util'
 import type { CommandConfig, ProcessOutputPayload, ProcessStatusPayload } from '../shared/types'
 import { terminateProcessTreeWithEscalation } from './process-tree'
-import { resolveServiceArgs, resolveShellExecutable } from './shell-runtime'
+import { extractLeadingWorkingDirectory, resolveServiceArgs, resolveShellExecutable } from './shell-runtime'
 import { buildChildProcessEnvironment } from './child-process-env'
 
 interface ProcessRecord {
@@ -547,7 +547,7 @@ export class ProcessManager {
       const released = await this.releasePortIfOccupied(explicitPort)
       for (const pid of released.rootPids) killedRootPids.add(pid)
     }
-    const cwd = this.extractLeadingCwd(config.command)
+    const cwd = extractLeadingWorkingDirectory(config.command)
     if (cwd) {
       const relatedListenerPids = await this.findListenerPidsByCwd(cwd)
       const roots = await this.resolveTerminationRoots(relatedListenerPids)
@@ -566,12 +566,6 @@ export class ProcessManager {
     const port = Number.parseInt(matched[1], 10)
     if (!Number.isFinite(port) || port <= 0 || port > 65535) return undefined
     return port
-  }
-
-  private extractLeadingCwd(command: string): string | undefined {
-    const matched = command.match(/^\s*cd\s+("([^"]+)"|'([^']+)'|([^\s&;]+))\s*&&/)
-    const raw = matched?.[2] || matched?.[3] || matched?.[4]
-    return raw?.trim() || undefined
   }
 
   private async findListenerPidsByCwd(cwd: string): Promise<number[]> {

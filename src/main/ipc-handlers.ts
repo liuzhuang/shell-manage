@@ -11,6 +11,7 @@ import type {
   AnalyticsEvent,
   AppConfig,
   CommandConfig,
+  CommandPublicAccessProvider,
   DashboardApproveReviewRequest,
   DashboardExecuteProbeRequest,
   LocalMetricSnapshot,
@@ -98,6 +99,7 @@ import type {
 } from '../shared/query-agent'
 import { isValidQueryAgentId, normalizeQueryAiRequest } from './query-ai-request'
 import { QueryAgentRunGuard } from './query-agent-run-guard'
+import { CommandPublicAccessManager } from './command-public-access'
 
 export interface IpcRuntimeControl {
   shutdown: () => Promise<void>
@@ -117,6 +119,7 @@ let localNetworkBytes: { rxBytes: number; txBytes: number; at: number } | null =
 export function registerIpcHandlers(
   configLoader: ConfigLoader,
   processManager: ProcessManager,
+  publicAccessManager: CommandPublicAccessManager,
   llmService: LlmService,
   getConfig: () => AppConfig,
   setConfig: (config: AppConfig) => void
@@ -272,6 +275,7 @@ export function registerIpcHandlers(
     configLoader.save(raw)
     setConfig(config)
     processManager.syncConfig(config.commands)
+    publicAccessManager.syncCommands(config.commands)
     broadcast('config:loaded', config)
   }
 
@@ -751,6 +755,7 @@ export function registerIpcHandlers(
     setConfig(config)
     syncLaunchAtLogin(config.settings.launchAtLogin === true)
     processManager.syncConfig(config.commands)
+    publicAccessManager.syncCommands(config.commands)
     broadcast('config:loaded', config)
     return { ok: true }
   })
@@ -820,6 +825,27 @@ export function registerIpcHandlers(
     processManager.restart(resolveCommandForExecution(command))
     return { ok: true }
   })
+
+  ipcMain.handle('command-public-access:list', (_e, commandName?: string) => {
+    return publicAccessManager.list(typeof commandName === 'string' ? commandName : undefined)
+  })
+  ipcMain.handle(
+    'command-public-access:start',
+    async (_e, commandName: string, provider: CommandPublicAccessProvider) => {
+      if (!['vercel', 'cpolar', 'cloudflare'].includes(provider)) throw new Error('不支持的公网访问方式')
+      const command = getConfig().commands.find((item) => item.name === commandName)
+      if (!command) throw new Error(`命令不存在: ${commandName}`)
+      return await publicAccessManager.start(command, provider)
+    }
+  )
+  ipcMain.handle(
+    'command-public-access:stop',
+    async (_e, commandName: string, provider: CommandPublicAccessProvider) => {
+      if (!['cpolar', 'cloudflare'].includes(provider)) throw new Error('仅临时公网链接可以停止')
+      await publicAccessManager.stop(commandName, provider)
+      return { ok: true }
+    }
+  )
 
   ipcMain.handle('preset:execute', async (_e, presetName: string) => {
     await runPresetSequence('start', presetName, getConfig, processManager)

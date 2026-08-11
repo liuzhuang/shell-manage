@@ -6,6 +6,8 @@ import type {
   AppConfig,
   AppUpdateBroadcastPayload,
   AppUpdateDisabledReason,
+  CommandPublicAccessProvider,
+  CommandPublicAccessStatusPayload,
   DashboardApproveReviewRequest,
   DashboardApproveReviewResponse,
   DashboardExecuteProbeRequest,
@@ -108,6 +110,17 @@ const api = {
   processStart: (name: string) => ipcRenderer.invoke('process:start', name),
   processStop: (name: string) => ipcRenderer.invoke('process:stop', name),
   processRestart: (name: string) => ipcRenderer.invoke('process:restart', name),
+  commandPublicAccessList: (commandName?: string) =>
+    ipcRenderer.invoke('command-public-access:list', commandName) as Promise<CommandPublicAccessStatusPayload[]>,
+  commandPublicAccessStart: (commandName: string, provider: CommandPublicAccessProvider) =>
+    ipcRenderer.invoke('command-public-access:start', commandName, provider) as Promise<CommandPublicAccessStatusPayload>,
+  commandPublicAccessStop: (commandName: string, provider: Exclude<CommandPublicAccessProvider, 'vercel'>) =>
+    ipcRenderer.invoke('command-public-access:stop', commandName, provider) as Promise<{ ok: true }>,
+  onCommandPublicAccessStatus: (handler: (payload: CommandPublicAccessStatusPayload) => void) => {
+    const wrapped = (_e: unknown, payload: CommandPublicAccessStatusPayload) => handler(payload)
+    ipcRenderer.on('command-public-access:status', wrapped)
+    return () => ipcRenderer.removeListener('command-public-access:status', wrapped)
+  },
   onProcessStatus: (handler: (payload: ProcessStatusPayload) => void) => {
     const wrapped = (_e: unknown, payload: ProcessStatusPayload) => handler(payload)
     ipcRenderer.on('process:status', wrapped)
