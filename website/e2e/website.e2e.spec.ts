@@ -5,7 +5,7 @@ const githubUrl = 'https://github.com/liuzhuang/shell-manage'
 const lensPointerOffset = 48
 
 test.describe('ShellManage 官网', () => {
-  test('首页说明核心用途并提供下载入口', async ({ page }) => {
+  test('首页说明核心用途并提供下载入口', async ({ page, request }) => {
     await page.goto('/')
 
     await expect(page).toHaveTitle('ShellManage — VibeCoding 项目启动与日志管理')
@@ -13,6 +13,18 @@ test.describe('ShellManage 官网', () => {
       'content',
       'ShellManage 面向同时维护多个 VibeCoding 项目的使用者。保存启动命令、SSH 隧道和重复操作，需要时直接运行，并在同一处查看状态和日志。'
     )
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'index, follow')
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', 'https://shell-manage.vercel.app/')
+    await expect(page.locator('meta[property="og:type"]')).toHaveAttribute('content', 'website')
+    await expect(page.locator('meta[property="og:title"]')).toHaveAttribute('content', await page.title())
+    await expect(page.locator('meta[property="og:url"]')).toHaveAttribute('content', 'https://shell-manage.vercel.app/')
+    await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+      'content',
+      'https://shell-manage.vercel.app/shellmanage-social-card.jpg'
+    )
+    await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute('content', 'summary_large_image')
+    await expect(page.locator('meta[name="twitter:title"]')).toHaveAttribute('content', await page.title())
+    expect((await request.get('/shellmanage-social-card.jpg')).ok()).toBe(true)
     await expect(page.getByTestId('site-header')).toContainText('ShellManage')
     await expect(page.getByTestId('home-page')).toBeVisible()
 

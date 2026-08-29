@@ -20,10 +20,9 @@ export function BatchLogModal({
   onClose: () => void
 }) {
   const [sidebarOffset, setSidebarOffset] = useState(readSidebarWidth)
-  const serviceCommands = commands.filter((cmd) => (cmd.mode || 'service') === 'service')
   const [selected, setSelected] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {}
-    for (const cmd of serviceCommands) {
+    for (const cmd of commands) {
       const state = statusMap[cmd.name]?.state
       init[cmd.name] = state === 'running' || state === 'restarting' || state === 'error'
     }
@@ -54,13 +53,13 @@ export function BatchLogModal({
 
   const toggleAll = (checked: boolean) => {
     const next: Record<string, boolean> = {}
-    for (const cmd of serviceCommands) {
+    for (const cmd of commands) {
       next[cmd.name] = checked
     }
     setSelected(next)
   }
 
-  const selectedNames = serviceCommands.filter((cmd) => selected[cmd.name]).map((cmd) => cmd.name)
+  const selectedNames = commands.filter((cmd) => selected[cmd.name]).map((cmd) => cmd.name)
 
   function handleSave() {
     if (selectedCount === 0) return
@@ -121,9 +120,9 @@ export function BatchLogModal({
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0, flex: 1, overflow: 'hidden' }}>
-          {serviceCommands.length === 0 ? (
+          {commands.length === 0 ? (
             <div style={{ color: 'var(--muted)', fontSize: 12, padding: '16px 0', textAlign: 'center' }}>
-              当前筛选条件下没有 service 模式的命令
+              当前没有可加入日志看板的命令
             </div>
           ) : (
             <>
@@ -132,15 +131,15 @@ export function BatchLogModal({
                   <input
                     type="checkbox"
                     data-testid="batch-log-select-all"
-                    checked={selectedCount === serviceCommands.length}
+                    checked={selectedCount === commands.length}
                     onChange={(e) => toggleAll(e.target.checked)}
                   />
-                  全选 ({selectedCount}/{serviceCommands.length})
+                  全选 ({selectedCount}/{commands.length})
                 </label>
               </div>
 
               <div style={{ overflow: 'auto', maxHeight: 280, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {serviceCommands.map((cmd) => {
+                {commands.map((cmd) => {
                   const state = statusMap[cmd.name]?.state ?? 'idle'
                   const stateLabel = state === 'running' ? '运行中' : state === 'error' ? '异常' : state === 'restarting' ? '重启中' : '空闲'
                   const stateColor = state === 'running' || state === 'restarting' ? 'var(--ok)' : state === 'error' ? 'var(--err)' : 'var(--muted)'

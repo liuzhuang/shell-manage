@@ -200,6 +200,22 @@ export default function App() {
     () => config.commands.filter((cmd) => (cmd.mode || 'service') === 'terminal'),
     [config.commands]
   )
+  const logDashboardStatusMap = useMemo(() => {
+    const next = { ...statusMap }
+    for (const command of terminalCommands) {
+      next[command.name] = { state: terminalStatusMap[command.name] === 'running' ? 'running' : 'idle' }
+    }
+    return next
+  }, [statusMap, terminalCommands, terminalStatusMap])
+  const logDashboardLogMap = useMemo(() => {
+    const next = { ...logMap }
+    for (const command of terminalCommands) {
+      const buffer = terminalPreviewByName[command.name] || ''
+      // ponytail: display the default terminal session; add instance selection when dashboards support multi-session commands.
+      next[command.name] = buffer ? buffer.replace(/\r/gu, '').split('\n') : []
+    }
+    return next
+  }, [logMap, terminalCommands, terminalPreviewByName])
   const logViewPresets = useMemo(() => normalizeLogViewPresets(config.settings.logViewPresets), [config.settings.logViewPresets])
 
   const selectedSessionBufferText = selectedCommand ? terminalPreviewByName[selectedCommand] || '' : ''
@@ -874,9 +890,9 @@ export default function App() {
   }
 
   function openMultiLogWithValidation(commandNames: string[]) {
-    const serviceCommandNameSet = new Set(config.commands.filter((item) => (item.mode || 'service') === 'service').map((item) => item.name))
+    const commandNameSet = new Set(config.commands.map((item) => item.name))
     const normalized = Array.from(new Set(commandNames.map((item) => item.trim()).filter(Boolean)))
-    const valid = normalized.filter((item) => serviceCommandNameSet.has(item))
+    const valid = normalized.filter((item) => commandNameSet.has(item))
     const invalidCount = normalized.length - valid.length
     if (valid.length === 0) {
       notify('预设内命令已失效，请更新预设后重试', 'warn')
@@ -1681,8 +1697,8 @@ export default function App() {
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <MultiLogPage
             commandNames={multiLogCommands}
-            statusMap={statusMap}
-            logMap={logMap}
+            statusMap={logDashboardStatusMap}
+            logMap={logDashboardLogMap}
             onBack={() => setPage('home')}
             onRemoveCommand={(name) => {
               const next = multiLogCommands.filter((n) => n !== name)
@@ -1691,7 +1707,7 @@ export default function App() {
             }}
             onOpenCommandLog={(name) => {
               setSelectedCommand(name)
-              setPage('log')
+              setPage((config.commands.find((command) => command.name === name)?.mode || 'service') === 'terminal' ? 'terminal' : 'log')
             }}
           />
         </div>
@@ -1916,9 +1932,9 @@ export default function App() {
       )}
       {showBatchLogModal && (
         <BatchLogModal
-          commands={filteredCommands}
+          commands={config.commands}
           logViewPresets={logViewPresets}
-          statusMap={statusMap}
+          statusMap={logDashboardStatusMap}
           onSavePreset={(presetName, selectedNames) => {
             void saveLogViewPreset(presetName, selectedNames)
           }}

@@ -118,23 +118,23 @@ test('点击 Dock 添加卡打开添加 Sheet', async () => {
 
 // ─── 添加日志看板 Sheet ──────────────────────────────────────────────────────
 
-test('Sheet 仅显示 service 模式命令', async () => {
+test('Sheet 可选择 service 和 terminal 模式命令', async () => {
   await openAddLogDashboardSheet()
 
   await expect(page.getByTestId('batch-log-item-svc-alpha')).toBeVisible()
   await expect(page.getByTestId('batch-log-item-svc-beta')).toBeVisible()
   await expect(page.getByTestId('batch-log-item-svc-gamma')).toBeVisible()
-  await expect(page.locator('[data-testid="batch-log-item-term-only"]')).toHaveCount(0)
+  await expect(page.getByTestId('batch-log-item-term-only')).toBeVisible()
 })
 
-test('Sheet 按当前 tag 过滤命令', async () => {
+test('Sheet 不受当前 tag 过滤影响', async () => {
   await page.getByTestId('tag-frontend').click()
   await page.getByTestId('log-dashboard-add-trigger').click()
   await expect(page.getByTestId('batch-log-modal')).toBeVisible()
 
   await expect(page.getByTestId('batch-log-item-svc-gamma')).toBeVisible()
-  await expect(page.locator('[data-testid="batch-log-item-svc-alpha"]')).toHaveCount(0)
-  await expect(page.locator('[data-testid="batch-log-item-svc-beta"]')).toHaveCount(0)
+  await expect(page.getByTestId('batch-log-item-svc-alpha')).toBeVisible()
+  await expect(page.getByTestId('batch-log-item-term-only')).toBeVisible()
 })
 
 test('Sheet 取消按钮可关闭', async () => {
@@ -291,6 +291,20 @@ test('日志看板面板跳转按钮可打开单命令日志详情', async () =>
   await page.getByTestId('multi-log-open-detail-svc-alpha').click()
   await expect(page.getByTestId('log-page')).toBeVisible()
   await expect(page.getByTestId('log-page')).toContainText('svc-alpha')
+})
+
+test('日志看板支持 terminal 命令并跳转交互窗口', async () => {
+  await page.getByTestId('command-run-term-only').click()
+  await expect(page.getByTestId('terminal-page')).toBeVisible()
+  await page.getByTestId('terminal-back-icon').click()
+
+  await openAddLogDashboardSheet()
+  await savePreset(page, { name: '终端组', commands: ['term-only'] })
+  await openMultiLogViaPreset('终端组')
+
+  await expect(page.getByTestId('multi-log-pane-term-only')).toContainText('term-only', { timeout: 10_000 })
+  await page.getByTestId('multi-log-open-detail-term-only').click()
+  await expect(page.getByTestId('terminal-page')).toBeVisible()
 })
 
 // ─── 日志数据展示 ─────────────────────────────────────────────────────────────
